@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.HashSet;
 import java.util.Map;
 
+/** 校验节点配置的字段形态，运行前额外检查必填项。 */
 @Component
 public class CanvasConfigValidator {
     public void validate(CanvasNodeCapability capability, ObjectNode config) {
@@ -30,12 +31,12 @@ public class CanvasConfigValidator {
         });
         capability.configFields().forEach((name, field) -> {
             if (complete || config.has(name)) {
-                validateField(name, field, config.get(name));
+                validateField(name, field, config.get(name), complete);
             }
         });
     }
 
-    private void validateField(String name, CanvasConfigField field, JsonNode value) {
+    private void validateField(String name, CanvasConfigField field, JsonNode value, boolean complete) {
         if (value == null) {
             if (field.required()) {
                 throw invalid("缺少节点配置字段: " + name, name);
@@ -55,6 +56,9 @@ public class CanvasConfigValidator {
             throw invalid("节点配置字段类型错误: " + name, name);
         }
         if (value.isTextual()) {
+            if (complete && field.required() && value.textValue().isBlank()) {
+                throw invalid("缺少节点配置内容: " + name, name);
+            }
             if (field.maxLength() != null && value.textValue().length() > field.maxLength()) {
                 throw invalid("节点配置文字超出长度限制: " + name, name);
             }

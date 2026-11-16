@@ -33,6 +33,13 @@
         LIMIT 1
         FOR UPDATE
     </select>
+    <select id="hasActiveProjectScriptParse" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM afv_agent_conversation c
+            JOIN afv_agent_run r ON r.active_conversation_id = c.conversation_id
+            WHERE c.project_id = #{projectId} AND r.agent_type IN ('script_full_parse', 'story_to_script')
+        )
+    </select>
     <select id="selectByRunId" resultType="com.stonewu.fusion.entity.ai.AgentRun">
         SELECT *
         FROM afv_agent_run FORCE INDEX (uk_agent_run_id)

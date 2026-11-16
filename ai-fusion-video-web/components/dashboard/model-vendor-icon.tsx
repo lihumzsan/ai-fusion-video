@@ -166,7 +166,7 @@ const PROVIDER_ICON_RULES: IconRule[] = [
   [/ollama/, "ollama"],
   [/volcengine|火山/, "volcengine"],
   [/doubao|豆包/, "doubao"],
-  [/openai/, "openAi"],
+  [/openai|codex/, "openAi"],
 ];
 
 function normalizedIdentity(values: Array<string | null | undefined>) {

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CanvasCapabilityRegistryTests {
     private final CanvasCapabilityRegistry registry = new CanvasCapabilityRegistry();
@@ -60,6 +61,28 @@ class CanvasCapabilityRegistryTests {
         new CanvasConfigValidator().validate(definition, config);
         assertThat(definition.inputs().getFirst().resolveType(config)).isEqualTo(CanvasValueType.SHOT);
         assertThat(definition.outputs().getFirst().resolveType(config)).isEqualTo(CanvasValueType.VIDEO);
+    }
+
+    @Test
+    void voiceDesignProducesConnectableAudioWithoutNeedingSourceMedia() {
+        var voice = registry.require(CanvasNodeKind.fromCode("voiceGeneration"));
+        var config = new ObjectMapper().createObjectNode().put("apiConfigId", 12)
+                .put("voiceDescription", "温和沉稳的男声").put("previewText", "你好，今天是个晴天。")
+                .put("language", "Chinese");
+        var validator = new CanvasConfigValidator();
+        validator.validate(voice, config);
+
+        assertThat(voice.inputs()).isEmpty();
+        assertThat(voice.outputs()).singleElement().satisfies(output -> {
+            assertThat(output.id()).isEqualTo("audio");
+            assertThat(output.resolveType(config)).isEqualTo(CanvasValueType.AUDIO);
+            assertThat(output.collection()).isFalse();
+        });
+        config.put("previewText", "   ");
+        validator.validateDraft(voice, config);
+        assertThatThrownBy(() -> validator.validate(voice, config)).hasMessageContaining("previewText");
+        config.put("previewText", "欢迎回来。").put("language", "Mandarin");
+        assertThatThrownBy(() -> validator.validate(voice, config)).hasMessageContaining("language");
     }
 
     private void assertDynamicFields(CanvasNodeCapability definition, List<CanvasPortDefinition> ports) {

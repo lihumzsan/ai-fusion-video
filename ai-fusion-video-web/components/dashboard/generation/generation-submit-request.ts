@@ -23,7 +23,9 @@ export function generationSubmitRequest(
     prompt: form.prompt.trim(),
     modelId,
     ratio: form.ratio || undefined,
-    resolution: form.resolution || undefined,
+    ...(mode === "image" || capabilities?.supportedResolutions.length !== 0
+      ? { resolution: form.resolution || undefined }
+      : {}),
     count: form.count,
   };
   if (mode === "image") {

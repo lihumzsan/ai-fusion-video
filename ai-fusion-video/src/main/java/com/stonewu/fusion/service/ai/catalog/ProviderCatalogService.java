@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
@@ -14,12 +15,16 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
+
 /** 服务端统一维护提供商身份、赞助资料和快捷配置默认值。 */
 @Service
 public class ProviderCatalogService {
     private final Map<String, ProviderDefinition> providers;
+    private final boolean localCodexAvailable;
 
-    public ProviderCatalogService(ObjectMapper objectMapper) throws IOException {
+    public ProviderCatalogService(ObjectMapper objectMapper, Environment environment) throws IOException {
+        localCodexAvailable = environment.matchesProfiles("local & !docker");
         try (var input = new ClassPathResource("provider-catalog/providers.json").getInputStream()) {
             List<ProviderDefinition> definitions = objectMapper.readValue(input, new TypeReference<>() {});
             var indexed = new LinkedHashMap<String, ProviderDefinition>();
@@ -40,10 +45,11 @@ public class ProviderCatalogService {
         }
     }
 
-    @Cacheable(value = "providerCatalog", key = "'catalog-v3'")
+    @Cacheable(value = "providerCatalog", key = "'catalog-v4-' + #root.target.isLocalCodexAvailable()")
     public List<ProviderDefinition> list() {
         return providers.values().stream()
                 .filter(provider -> !provider.hidden())
+                .filter(provider -> localCodexAvailable || !CODEX.equals(provider.platform()))
                 .sorted(Comparator.comparing(ProviderDefinition::sponsored).reversed()
                         .thenComparing(ProviderDefinition::id))
                 .toList();
@@ -57,7 +63,21 @@ public class ProviderCatalogService {
         if (definition == null) {
             throw new BusinessException(400, "提供商不存在，请重新选择");
         }
+        if (CODEX.equals(definition.platform())) {
+            requireLocalCodex();
+        }
         return definition;
+    }
+
+    public boolean isLocalCodexAvailable() {
+        return localCodexAvailable;
+    }
+
+    /** 限制复用桌面登录的 Codex 接入在本机部署环境。 */
+    public void requireLocalCodex() {
+        if (!localCodexAvailable) {
+            throw new BusinessException(409, "Codex 仅在本机环境可用");
+        }
     }
 
     public void validateBinding(ApiConfig config) {

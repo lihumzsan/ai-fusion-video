@@ -12,12 +12,13 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { uploadFile } from "@/lib/api/storage";
+import { mediaId } from "@/lib/api/media";
 import { getApiErrorMessage } from "@/lib/api/api-error";
 import { resolveMediaUrl } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SafeImage } from "@/components/media/managed-image";
+import { H3_REFERENCE_AUDIO_ACCEPT, uploadGenerationReference } from "./generation-reference-upload";
 
 type ReferenceMediaType = "image" | "video" | "audio";
 
@@ -30,25 +31,23 @@ interface GenerationReferenceFieldProps {
   onChange: (values: string[]) => void;
   uploadDisabledReason?: string;
   manualInputAllowed?: boolean;
+  h3ReferenceAudio?: boolean;
 }
 
 const MEDIA_CONFIG: Record<
   ReferenceMediaType,
-  { accept: string; folder: string; emptyLabel: string }
+  { accept: string; emptyLabel: string }
 > = {
   image: {
     accept: "image/*",
-    folder: "generation-references",
     emptyLabel: "添加图片",
   },
   video: {
     accept: "video/*",
-    folder: "generation-video-references",
     emptyLabel: "添加视频",
   },
   audio: {
     accept: "audio/*",
-    folder: "generation-audio-references",
     emptyLabel: "添加音频",
   },
 };
@@ -62,6 +61,7 @@ export function GenerationReferenceField({
   onChange,
   uploadDisabledReason,
   manualInputAllowed = true,
+  h3ReferenceAudio = false,
 }: GenerationReferenceFieldProps) {
   const config = MEDIA_CONFIG[mediaType];
   const inputRef = useRef<HTMLInputElement>(null);
@@ -80,7 +80,7 @@ export function GenerationReferenceField({
     setUploading(true);
     try {
       const urls = await Promise.all(
-        selected.map((file) => uploadFile(file, config.folder)),
+        selected.map((file) => uploadGenerationReference(file, mediaType)),
       );
       onChange([...values, ...urls]);
     } catch (error) {
@@ -93,7 +93,19 @@ export function GenerationReferenceField({
 
   const addUrl = () => {
     const value = url.trim();
-    if (!value || !canAdd) return;
+    if (!value || !canAdd) {
+      return;
+    }
+    if (h3ReferenceAudio) {
+      try {
+        if (!mediaId(value)) {
+          throw new Error("请输入托管媒体引用");
+        }
+      } catch {
+        toast.error("请输入有效的托管媒体引用（media://…），或上传 MP3 / WAV。");
+        return;
+      }
+    }
     onChange([...values, value]);
     setUrl("");
     setShowUrl(false);
@@ -176,7 +188,7 @@ export function GenerationReferenceField({
         </p>
       )}
 
-      {showUrl ? (
+      {showUrl && manualInputAllowed ? (
         <div className="mt-3 flex gap-2">
           <Input
             value={url}
@@ -188,7 +200,9 @@ export function GenerationReferenceField({
               }
             }}
             placeholder={
-              mediaType === "image" ? "输入图片 URL 或 Data URI" : "输入媒体 URL"
+              h3ReferenceAudio
+                ? "输入托管媒体引用（media://…）"
+                : mediaType === "image" ? "输入图片 URL 或 Data URI" : "输入媒体 URL"
             }
             className="h-8 rounded-lg text-xs"
             autoFocus
@@ -208,7 +222,7 @@ export function GenerationReferenceField({
               onClick={() => setShowUrl(true)}
             >
               <Link2 className="h-3 w-3" />
-              通过 URL 添加
+              {h3ReferenceAudio ? "通过媒体引用添加" : "通过 URL 添加"}
             </Button>
           </div>
         )
@@ -219,7 +233,7 @@ export function GenerationReferenceField({
         hidden
         multiple={maxCount > 1}
         type="file"
-        accept={config.accept}
+        accept={h3ReferenceAudio ? H3_REFERENCE_AUDIO_ACCEPT : config.accept}
         onChange={(event) => void uploadFiles(Array.from(event.target.files || []))}
       />
     </section>

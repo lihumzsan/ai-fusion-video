@@ -2,6 +2,7 @@ package com.stonewu.fusion.service.canvas.run.text;
 
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.service.ai.agentscope.message.AgentModelHttpFailure;
+import com.stonewu.fusion.service.ai.provider.codex.CodexTextFailure;
 import com.stonewu.fusion.service.canvas.run.CanvasRunRepository;
 import com.stonewu.fusion.service.generation.transport.GenerationProviderFailure;
 import jakarta.annotation.PreDestroy;
@@ -9,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import reactor.core.Exceptions;
 
 import java.time.Instant;
 import java.util.Map;
@@ -21,6 +23,7 @@ import java.util.concurrent.Semaphore;
 import static com.stonewu.fusion.service.canvas.run.text.CanvasTextData.Claim;
 import static com.stonewu.fusion.service.canvas.run.text.CanvasTextData.Job;
 
+/** 执行单次画布文本任务并持久化远端结果状态。 */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -91,6 +94,13 @@ public class CanvasTextWorker {
             }
             try {
                 var current = repository.get(job.id(), false);
+                // Codex can reject before its turn is sent or confirm a failed terminal turn.
+                if (current.startedAt() != null && current.result() == null
+                        && Exceptions.unwrap(failure) instanceof CodexTextFailure rejected) {
+                    tasks.finish(job.claim(), cancelled(current) ? "CANCELLED" : "FAILED", rejected.getMessage(),
+                            false);
+                    return;
+                }
                 if (current.startedAt() != null && current.result() == null && AgentModelHttpFailure.status(
                         failure) != null) {
                     var rejected = GenerationProviderFailure.find(failure);

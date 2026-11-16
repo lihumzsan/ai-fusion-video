@@ -5,6 +5,41 @@ import type {
 } from "@/lib/api/comfyui-workflow";
 import type { GenerationScope } from "@/lib/api/generation-execution";
 
+export interface ComfyUiTestField {
+  name: string;
+  type: ComfyUiBindingValueType;
+  minimum?: number;
+  maximum?: number;
+  hint?: string;
+}
+
+export const h3ReferenceTestFields: ComfyUiTestField[] = [
+  { name: "prompt", type: "string", hint: "用 <Picture 1>、<Audio 1> 等标记引用相应顺序的素材。" },
+  { name: "referenceImages", type: "uploaded_image", minimum: 1, maximum: 9, hint: "上传 1–9 张参考图。" },
+  { name: "referenceAudios", type: "uploaded_audio", maximum: 3, hint: "最多 3 段，每段至少 2 秒，合计不超过 15 秒。" },
+  { name: "duration", type: "integer", minimum: 4, maximum: 15, hint: "4–15 秒。" },
+  { name: "ratio", type: "string", hint: "例如 16:9 或 9:16。" },
+  { name: "seed", type: "integer" },
+];
+
+export function isH3ReferenceWorkflow(raw: string): boolean {
+  try {
+    return JSON.parse(raw)?.["168"]?._meta?.aiFusionVideoProfile === "h3-ref";
+  } catch {
+    return false;
+  }
+}
+
+export function markH3ReferenceWorkflow(raw: string): string {
+  if (isH3ReferenceWorkflow(raw)) {
+    return raw;
+  }
+  const graph = JSON.parse(raw);
+  const output = graph["168"];
+  output._meta = { ...output._meta, aiFusionVideoProfile: "h3-ref" };
+  return JSON.stringify(graph, null, 2);
+}
+
 export interface PendingComfyUiTest {
   schemaVersion: 1;
   createdAt: string;

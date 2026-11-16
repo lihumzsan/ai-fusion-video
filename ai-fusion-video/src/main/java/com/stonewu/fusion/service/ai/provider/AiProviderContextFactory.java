@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
+import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
+
 /**
  * 统一构建提供商上下文，收敛平台、密钥、地址和模型配置解析逻辑。
  */
@@ -25,6 +27,7 @@ public class AiProviderContextFactory {
     private final ApiConfigService apiConfigService;
     private final AiModelMetadataResolver aiModelMetadataResolver;
 
+    /** 按模型与其接入记录确定实际请求协议。 */
     public AiProviderContext createForModel(AiModel model) {
         if (model == null) {
             throw new BusinessException("AI 模型不存在");
@@ -39,6 +42,12 @@ public class AiProviderContextFactory {
         if (StrUtil.isBlank(requestProtocol)) {
             throw new BusinessException(
                     "文本模型未配置请求协议：请在模型中设置覆盖协议，或在 API 配置中设置文本默认协议");
+        }
+        if (metadata.usesLocalCodex()) {
+            apiConfigService.requireLocalCodex();
+            if (!CODEX.equals(metadata.normalizedPlatform()) || !CODEX.equals(requestProtocol)) {
+                throw new BusinessException(400, "Codex 模型必须绑定使用 Codex 文本协议的本机接入配置");
+            }
         }
         return AiProviderContext.builder()
                 .model(model)

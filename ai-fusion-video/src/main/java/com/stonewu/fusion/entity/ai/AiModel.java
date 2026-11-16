@@ -15,7 +15,7 @@ import java.util.Map;
  * AI 模型实体
  * <p>
  * 对应数据库表：afv_ai_model
- * 管理系统中可用的 AI 模型配置，包括文本模型和图片模型。
+ * 管理系统中可用的文本、图片、视频与参考音频模型配置。
  */
 @TableName(value = "afv_ai_model", autoResultMap = true)
 @Data
@@ -53,7 +53,7 @@ public class AiModel extends BaseEntity {
     private String capabilityPresetCode;
 
     /**
-     * 模型类型：1-文本对话 2-图片生成 3-视频生成
+     * 模型类型：1-文本对话 2-图片生成 3-视频生成 4-参考音频生成
      */
     private Integer modelType;
 

@@ -6,7 +6,7 @@ const externalKinds = new Set([
   "textGeneration", "imageGeneration", "videoGeneration", "comfyui",
   "scriptParse", "storyToScript", "episodeParse", "storyboardGenerate",
   "assetExtract", "assetImageGenerate", "frameGenerate", "agent",
-  "musicGeneration", "sfxGeneration", "mcpTool",
+  "voiceGeneration", "musicGeneration", "sfxGeneration", "mcpTool",
 ]);
 
 export function usesExternalCreation(plan: CanvasRunPlan, nodes: CanvasNode[]): boolean {

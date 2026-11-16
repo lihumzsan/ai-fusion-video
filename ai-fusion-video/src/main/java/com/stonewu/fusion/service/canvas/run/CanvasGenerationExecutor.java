@@ -124,6 +124,7 @@ public class CanvasGenerationExecutor implements Executor {
         return submissions.videoFrozen(task, key, context, node.id(), frozen, apiHash);
     }
 
+    /** 内容设定已合入提示词，工作流仅接收实际绑定的参数和媒体。 */
     private ObjectNode workflow(NodeRun node) {
         if (node.plan().node().kind() != CanvasNodeKind.COMFYUI) {
             return null;
@@ -131,6 +132,9 @@ public class CanvasGenerationExecutor implements Executor {
         var value = node.plan().node().config().deepCopy();
         value.remove(List.of("modelId", "workflowVersionId", "resultType"));
         node.inputs().values().forEach((port, entries) -> {
+            if (port.equals("context")) {
+                return;
+            }
             if (port.equals("prompt")) {
                 value.put(port, entries.getFirst().text());
             } else if (port.equals("firstFrame") || port.equals("lastFrame")) {

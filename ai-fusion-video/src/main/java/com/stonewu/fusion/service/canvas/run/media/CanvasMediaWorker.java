@@ -2,6 +2,7 @@ package com.stonewu.fusion.service.canvas.run.media;
 
 import com.stonewu.fusion.service.media.job.MediaJob;
 import com.stonewu.fusion.common.BusinessException;
+import com.stonewu.fusion.service.canvas.model.CanvasNodeKind;
 import com.stonewu.fusion.service.media.job.MediaJobRepository;
 import com.stonewu.fusion.service.media.model.MediaException;
 import jakarta.annotation.PreDestroy;
@@ -21,6 +22,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 
+/** 在媒体任务租约有效时执行本地处理或推进外部音频工作流。 */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -29,6 +31,7 @@ public class CanvasMediaWorker {
     private final MediaJobRepository jobs;
     private final CanvasLocalMediaProcessor local;
     private final CanvasAudioProcessor audio;
+    private final CanvasVoiceProcessor voice;
     private final String owner = "canvas-media-" + UUID.randomUUID();
     private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
     private final Semaphore slots = new Semaphore(4);
@@ -61,8 +64,10 @@ public class CanvasMediaWorker {
     }
 
     private void step(MediaJob job) {
+        boolean voiceJob = false;
         try (var directory = new WorkDirectory()) {
             var input = tasks.input(job);
+            voiceJob = input.operation() == CanvasNodeKind.VOICE_GENERATION;
             if (CanvasMediaExecutor.AUDIO.contains(input.operation())) {
                 if (!job.cancelRequested()) {
                     try {
@@ -74,7 +79,11 @@ public class CanvasMediaWorker {
                         job = jobs.requestStop(job.claim());
                     }
                 }
-                audio.step(job, input, directory.path);
+                if (voiceJob) {
+                    voice.step(job, input, directory.path);
+                } else {
+                    audio.step(job, input, directory.path);
+                }
             } else if (job.cancelRequested()) {
                 tasks.finish(job.claim(), "CANCELLED", "本地处理已停止", null, false);
             } else {
@@ -87,6 +96,12 @@ public class CanvasMediaWorker {
                 return;
             }
             try {
+                if (voiceJob && failure instanceof MediaException media
+                        && media.getErrorCode().equals("MEDIA_JOB_FENCED")
+                        && jobs.observe(job.claim()).cancelRequested()) {
+                    tasks.waitNext(job.claim(), "继续处理参考音频取消", false);
+                    return;
+                }
                 if (failure instanceof MediaException media && media.getErrorCode()
                         .equals("MEDIA_INGEST_IN_PROGRESS")) {
                     tasks.waitNext(job.claim(), "恢复原任务媒体接收", false);

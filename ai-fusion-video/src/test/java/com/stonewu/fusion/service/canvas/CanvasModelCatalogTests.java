@@ -70,6 +70,77 @@ class CanvasModelCatalogTests {
         assertThatThrownBy(() -> catalog.requireAudio(12)).hasMessageContaining("Sonilo");
     }
 
+    @Test
+    void voicePickerUsesComfyUiServicesAndRejectsOtherOrDisabledConnections() throws Exception {
+        var comfy = ApiConfig.builder().id(21L).name("音色工作站").platform("comfyui").status(1)
+                .apiKey("voice-test-only-token").build();
+        var sonilo = ApiConfig.builder().id(22L).name("配乐").platform("sonilo").status(1).build();
+        when(apis.getListByPlatform("comfyui")).thenReturn(List.of(comfy));
+        when(apis.getListByPlatform("sonilo")).thenReturn(List.of(sonilo));
+        when(apis.getById(21L)).thenReturn(comfy);
+        when(apis.getById(22L)).thenReturn(sonilo);
+
+        assertThat(catalog.voiceServices()).containsExactly(new CanvasModelCatalog.AudioService(21, "音色工作站"));
+        assertThat(catalog.audioServices()).containsExactly(new CanvasModelCatalog.AudioService(22, "配乐"));
+        assertThat(new ObjectMapper().writeValueAsString(catalog.voiceServices()))
+                .doesNotContain("voice-test-only-token");
+        assertThat(catalog.requireVoice(21)).isSameAs(comfy);
+        assertThatThrownBy(() -> catalog.requireVoice(22)).hasMessageContaining("ComfyUI");
+        comfy.setStatus(0);
+        assertThatThrownBy(() -> catalog.requireVoice(21)).hasMessageContaining("ComfyUI");
+    }
+
+    @Test
+    void codexIsAvailableToCanvasAgentsOnTheLocalBackend() {
+        var model = AiModel.builder().id(25L).name("本机文本模型").status(1).modelType(1).modelProtocol("codex")
+                .code("codex-model").apiConfigId(26L).build();
+        var api = ApiConfig.builder().id(26L).status(1).platform("codex").build();
+        when(models.getById(25L)).thenReturn(model);
+        when(apis.getById(26L)).thenReturn(api);
+        when(apis.isLocalCodexAvailable()).thenReturn(true, false);
+
+        CanvasModelCatalog.requireAgentModel(catalog.require(25));
+        assertThatThrownBy(() -> catalog.require(25)).hasMessageContaining("仅在本机环境可用");
+    }
+
+    @Test
+    void voiceModelsRequireTheRegisteredProtocolAndFreezeTheirOwnConnection() throws Exception {
+        var voice = AiModel.builder().id(31L).name("音色模型").status(1).modelType(4).modelProtocol("comfyui")
+                .code("qwen3-tts-voice-design-1.7b").apiConfigId(21L).build();
+        var comfy = ApiConfig.builder().id(21L).status(1).platform("comfyui").apiKey("voice-model-test-token").build();
+        var alternate = ApiConfig.builder().id(22L).status(1).platform("comfyui").build();
+        when(models.getEnabledList()).thenReturn(List.of(voice));
+        when(models.getById(31L)).thenReturn(voice);
+        when(apis.getById(21L)).thenReturn(comfy);
+        when(apis.getById(22L)).thenReturn(alternate);
+
+        assertThat(catalog.list()).singleElement().satisfies(option -> {
+            assertThat(option.kind()).isEqualTo("voice");
+            assertThat(option.resultType()).isEqualTo("audio");
+            assertThat(option.versions()).isEmpty();
+            assertThat(option.unavailable()).isNull();
+        });
+        assertThat(new ObjectMapper().writeValueAsString(catalog.list())).doesNotContain("voice-model-test-token");
+        assertThatThrownBy(() -> CanvasModelCatalog.requireAgentModel(catalog.require(31))).hasMessageContaining("文本模型");
+        var original = catalog.requireVoiceModel(31);
+        assertThat(original.api()).isSameAs(comfy);
+        String fingerprint = catalog.voiceModelFingerprint(original.model());
+        voice.setName("更新显示名称");
+        assertThat(catalog.voiceModelFingerprint(catalog.requireVoiceModel(31).model())).isEqualTo(fingerprint);
+        voice.setApiConfigId(22L);
+        var updated = catalog.requireVoiceModel(31);
+        assertThat(updated.api()).isSameAs(alternate);
+        assertThat(catalog.voiceModelFingerprint(updated.model())).isNotEqualTo(fingerprint);
+        alternate.setStatus(0);
+        assertThatThrownBy(() -> catalog.requireVoiceModel(31)).hasMessageContaining("绑定的 ComfyUI 服务已停用");
+        alternate.setStatus(1);
+        voice.setModelProtocol("openai");
+        assertThatThrownBy(() -> catalog.requireVoiceModel(31)).hasMessageContaining("Qwen3-TTS");
+        voice.setModelProtocol("comfyui");
+        voice.setCode("different-voice-model");
+        assertThatThrownBy(() -> catalog.requireVoiceModel(31)).hasMessageContaining("Qwen3-TTS");
+    }
+
     private AiModel model() {
         AiModel model = new AiModel(); model.setId(1L); model.setName("测试图片模型"); model.setModelType(2);
         model.setStatus(1); model.setApiConfigId(10L); model.setModelProtocol("openai");

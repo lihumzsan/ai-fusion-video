@@ -1,5 +1,6 @@
 package com.stonewu.fusion.service.canvas.capability;
 
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign;
 import com.stonewu.fusion.service.canvas.model.CanvasNodeKind;
 import com.stonewu.fusion.service.canvas.model.CanvasValueType;
 
@@ -36,6 +37,7 @@ final class CanvasMediaCapabilities {
                 fields(field("modelId", integer(1, MAX_SAFE_ID, false)),
                         field("workflowVersionId", integer(1, MAX_SAFE_ID, false)),
                         field("resultType", choice(true, "image", "video")), field("prompt", text(32000)),
+                        field("ratio", text(32)),
                         field("negativePrompt", text(32000)), field("fps", integer(1, 120, false)),
                         field("generateAudio", flag()),
                         field("width", integer(1, 16384, false)), field("height", integer(1, 16384, false)),
@@ -56,6 +58,12 @@ final class CanvasMediaCapabilities {
                 List.of(port("image", CanvasValueType.IMAGE, false, false))));
         result.add(audio(CanvasNodeKind.MUSIC_GENERATION, "生成配乐", "music"));
         result.add(audio(CanvasNodeKind.SFX_GENERATION, "生成音效", "sfx"));
+        result.add(capability(CanvasNodeKind.VOICE_GENERATION, "生成参考音频", "generation", "voice", false,
+                fields(field("modelId", integer(1, MAX_SAFE_ID, false)),
+                        field("apiConfigId", integer(1, MAX_SAFE_ID, false)),
+                        field("voiceDescription", text(4000, true)), field("previewText", text(10000, true)),
+                        field("language", choice(true, ComfyUiVoiceDesign.LANGUAGES.toArray(String[]::new)))),
+                List.of(), List.of(port("audio", CanvasValueType.AUDIO, false, false))));
         result.add(capability(CanvasNodeKind.AUDIO_MIX, "混音", "delivery", "compose", false,
                 fields(field("musicVolume", number(0, 1)), field("originalVolume", number(0, 1)),
                         field("sfxVolume", number(0, 1))),

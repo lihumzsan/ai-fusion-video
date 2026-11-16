@@ -138,6 +138,9 @@ export function compatibleNodes(
 }
 
 export function initialConfig(capability: CanvasCapability): CanvasConfig {
+  if (capability.kind === "voiceGeneration") {
+    return { language: "Auto" };
+  }
   if (capability.kind === "foreach") return { maxItems: 10 };
   return Object.fromEntries(
     Object.entries(capability.configFields)

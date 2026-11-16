@@ -17,21 +17,30 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
 
@@ -102,6 +111,128 @@ class AiModelServiceTests {
         verifyClearOtherDefaults(2, 101L);
     }
 
+    @ParameterizedTest
+    @CsvSource({"0, 1, 模型未启用", "1, 0, API 配置未启用"})
+    void creatingAnUnavailableDefaultPreservesTheExistingDefault(int modelStatus, int apiStatus, String error) {
+        var candidate = AiModel.builder().name("候选模型").code("chat").modelType(1).apiConfigId(1L)
+                .defaultModel(true).status(modelStatus).build();
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder().id(1L).textProtocol("openai")
+                .status(apiStatus).build());
+
+        assertThatThrownBy(() -> aiModelService.createAiModel(candidate)).hasMessageContaining(error);
+        verify(aiModelMapper, never()).insert(any(AiModel.class));
+        verify(aiModelMapper, never()).update(isNull(), any());
+    }
+
+    @Test
+    void codexTextModelCanBecomeTheDefaultAssistantModel() {
+        AiModel model = AiModel.builder().id(202L).name("Codex").code("gpt-6.1-sol").modelType(1)
+                .apiConfigId(1L).defaultModel(false).build();
+        when(aiModelMapper.selectById(202L)).thenReturn(model);
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder()
+                .platform("codex").textProtocol("codex").build());
+
+        aiModelService.updateAiModel(202L, null, null, null, null, null, null, null, null, null,
+                null, true, null, null, null, null, null, null, null, null);
+
+        assertThat(model.getDefaultModel()).isTrue();
+        verify(aiModelMapper).update(eq(model), any());
+        verifyClearOtherDefaults(1, 202L);
+    }
+
+    @Test
+    void codexTextModelRejectsImageUrlTransport() {
+        AiModel model = AiModel.builder().name("Codex").code("gpt-6.1-sol").modelType(1)
+                .apiConfigId(1L).multimodalInputTypes(List.of("image"))
+                .multimodalInputTransports(Map.of("image", List.of("url"))).build();
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder()
+                .platform("codex").textProtocol("codex").build());
+
+        assertThatThrownBy(() -> aiModelService.createAiModel(model))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Base64");
+        verify(aiModelMapper, never()).insert(any(AiModel.class));
+    }
+
+    @Test
+    void qwenVoiceDesignCanBeCreatedWithoutImportedWorkflow() {
+        var model = AiModel.builder().name("Qwen 音色设计").code("qwen3-tts-voice-design-1.7b")
+                .modelType(4).modelProtocol("comfyui").apiConfigId(1L).build();
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder().platform("comfyui").status(1).build());
+        doAnswer(invocation -> {
+            model.setId(101L);
+            return 1;
+        }).when(aiModelMapper).insert(model);
+
+        assertThat(aiModelService.createAiModel(model)).isEqualTo(101L);
+        assertThat(model.getComfyuiWorkflowId()).isNull();
+        verifyNoInteractions(comfyUiWorkflowService, generationCapabilities);
+    }
+
+    @Test
+    void voiceDesignRejectsUnusableBindingsBeforeSaving() {
+        var model = AiModel.builder().name("Qwen 音色设计").code("qwen3-tts-voice-design-1.7b")
+                .modelType(4).modelProtocol("comfyui").apiConfigId(1L).build();
+        var api = ApiConfig.builder().platform("sonilo").status(1).build();
+        when(apiConfigService.getById(1L)).thenReturn(api);
+
+        assertThatThrownBy(() -> aiModelService.createAiModel(model)).hasMessageContaining("ComfyUI");
+        api.setPlatform("comfyui");
+        api.setStatus(0);
+        assertThatThrownBy(() -> aiModelService.createAiModel(model)).hasMessageContaining("启用");
+        api.setStatus(1);
+        model.setModelProtocol("openai_compatible");
+        assertThatThrownBy(() -> aiModelService.createAiModel(model)).hasMessageContaining("请求协议");
+        model.setModelProtocol("comfyui");
+        model.setCode("other-voice-model");
+        assertThatThrownBy(() -> aiModelService.createAiModel(model)).hasMessageContaining("qwen3-tts-voice-design-1.7b");
+        model.setCode("qwen3-tts-voice-design-1.7b");
+        model.setComfyuiWorkflowId(44L);
+        assertThatThrownBy(() -> aiModelService.createAiModel(model)).hasMessageContaining("工作流");
+        verify(aiModelMapper, never()).insert(any(AiModel.class));
+    }
+
+    @Test
+    void existingVoiceAndVideoModelsCannotConvertIntoEachOther() {
+        var voice = AiModel.builder().id(12L).modelType(4).build();
+        var video = AiModel.builder().id(13L).modelType(3).build();
+        when(aiModelMapper.selectById(12L)).thenReturn(voice);
+        when(aiModelMapper.selectById(13L)).thenReturn(video);
+
+        assertThatThrownBy(() -> aiModelService.updateAiModel(12L, null, null, null, null, 3, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null))
+                .hasMessageContaining("不能与其他模型类型互相转换");
+        assertThatThrownBy(() -> aiModelService.updateAiModel(13L, null, null, null, null, 4, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null))
+                .hasMessageContaining("不能与其他模型类型互相转换");
+        assertThatThrownBy(() -> aiModelService.requireAgentModel(voice)).hasMessageContaining("生成参考音频");
+        verify(aiModelMapper, never()).update(any(AiModel.class), any());
+    }
+
+    @Test
+    void assistantListAndDirectSelectionIncludeCodexTextModels() {
+        AiModel codex = AiModel.builder().code("gpt-6.1-sol").modelType(1)
+                .modelProtocol("codex").apiConfigId(12L).build();
+        AiModel cloud = AiModel.builder().code("chat-model").modelType(1).apiConfigId(34L).build();
+        when(aiModelMapper.selectList(any())).thenReturn(List.of(codex, cloud));
+        when(apiConfigService.isLocalCodexAvailable()).thenReturn(true);
+
+        assertThat(aiModelService.getListByType(1)).containsExactly(codex, cloud);
+        aiModelService.requireAgentModel(codex);
+    }
+
+    @Test
+    void assistantListExcludesCodexModelsOutsideLocalEnvironment() {
+        AiModel codex = AiModel.builder().code("gpt-6.1-sol").modelType(1)
+                .modelProtocol("codex").build();
+        AiModel inheritedCodex = AiModel.builder().code("gpt-6.1-sol").modelType(1).apiConfigId(12L).build();
+        AiModel cloud = AiModel.builder().code("chat-model").modelType(1).apiConfigId(34L).build();
+        when(aiModelMapper.selectList(any())).thenReturn(List.of(codex, inheritedCodex, cloud));
+        when(apiConfigService.getIdsByPlatform("codex")).thenReturn(Set.of(12L));
+
+        assertThat(aiModelService.getListByType(1)).containsExactly(cloud);
+    }
+
     @Test
     void updateAiModelShouldClearOtherDefaultsWhenMarkedAsDefault() {
         AiModel existing = AiModel.builder()
@@ -111,10 +242,11 @@ class AiModelServiceTests {
                 .modelType(3)
                 .apiConfigId(1L)
                 .defaultModel(false)
+                .status(0)
                 .build();
         when(aiModelMapper.selectById(202L)).thenReturn(existing);
-        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder()
-                .id(1L)
+        when(apiConfigService.getById(2L)).thenReturn(ApiConfig.builder()
+                .id(2L)
                 .videoProtocol("dashscope")
                 .build());
 
@@ -128,10 +260,10 @@ class AiModelServiceTests {
                 null,
                 null,
                 null,
-                null,
+                1,
                 null,
                 true,
-                null,
+                2L,
                 null,
                 null,
                 null,
@@ -142,9 +274,60 @@ class AiModelServiceTests {
         );
 
         assertTrue(existing.getDefaultModel());
-        verify(aiModelMapper).updateById(existing);
+        verify(aiModelMapper).update(eq(existing), any());
         verify(chatModelFactory).evict(202L);
         verifyClearOtherDefaults(3, 202L);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, 1, 模型未启用", "1, 0, API 配置未启用", "1, , API 配置不存在"})
+    void promotingAnUnavailableDefaultPreservesTheExistingDefault(int modelStatus, Integer apiStatus, String error) {
+        var candidate = AiModel.builder().id(202L).name("候选模型").code("chat").modelType(1)
+                .modelProtocol("openai").apiConfigId(1L).defaultModel(false).build();
+        when(aiModelMapper.selectById(202L)).thenReturn(candidate);
+        if (apiStatus != null) {
+            when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder().id(1L).textProtocol("openai")
+                    .status(apiStatus).build());
+        }
+
+        assertThatThrownBy(() -> aiModelService.updateAiModel(202L, null, null, null, null, null, null, null, null,
+                modelStatus, null, true, null, null, null, null, null, null, null, null)).hasMessageContaining(error);
+        verify(aiModelMapper, never()).update(any(AiModel.class), any());
+        verify(aiModelMapper, never()).update(isNull(), any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, , , 1, 模型未启用", ", 2, , 0, API 配置未启用", ", , 2, 0, API 配置未启用"})
+    void changingADefaultModelRequiresTheEffectiveConfigurationToBeUsable(
+            Integer modelStatus, Long apiConfigId, Integer modelType, int apiStatus, String error) {
+        var current = AiModel.builder().id(202L).name("默认模型").code("chat").modelType(1)
+                .modelProtocol("openai").apiConfigId(1L).defaultModel(true).build();
+        when(aiModelMapper.selectById(202L)).thenReturn(current);
+        long effectiveApiId = apiConfigId != null ? apiConfigId : current.getApiConfigId();
+        when(apiConfigService.getById(effectiveApiId)).thenReturn(ApiConfig.builder().id(effectiveApiId)
+                .textProtocol("openai").status(apiStatus).build());
+
+        assertThatThrownBy(() -> aiModelService.updateAiModel(202L, null, null, null, null, modelType, null,
+                null, null, modelStatus, null, null, apiConfigId, null, null, null, null, null, null, null))
+                .hasMessageContaining(error);
+        verify(aiModelMapper, never()).update(any(AiModel.class), any());
+        verify(aiModelMapper, never()).update(isNull(), any());
+    }
+
+    @Test
+    void clearingTheDefaultAllowsDisablingTheModel() {
+        var current = AiModel.builder().id(202L).name("默认模型").code("chat").modelType(1)
+                .modelProtocol("openai").apiConfigId(1L).defaultModel(true).build();
+        when(aiModelMapper.selectById(202L)).thenReturn(current);
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder().id(1L).status(0).build());
+
+        aiModelService.updateAiModel(202L, null, null, null, null, null, null, null, null,
+                0, null, false, null, null, null, null, null, null, null, null);
+
+        assertThat(current.getStatus()).isZero();
+        assertThat(current.getDefaultModel()).isFalse();
+        verify(aiModelMapper).update(eq(current), any());
+        verify(aiModelMapper, never()).update(isNull(), any());
     }
 
     @Test

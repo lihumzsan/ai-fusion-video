@@ -46,6 +46,13 @@ export function validateCanvasConfig(
         (field.maxLength !== null && value.length > field.maxLength))
     )
       return `${label}内容不符合长度要求`;
+    if (
+      complete && capability.kind === "voiceGeneration" &&
+      (key === "voiceDescription" || key === "previewText") &&
+      typeof value === "string" && !value.trim()
+    ) {
+      return `请填写${label}`;
+    }
     if (field.enumValues.length && !field.enumValues.includes(String(value)))
       return `${label}不在允许选项中`;
   }

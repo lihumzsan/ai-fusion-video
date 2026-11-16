@@ -15,7 +15,6 @@ import {
 import type { AiModel } from "@/lib/api/ai-model";
 import type { GenerationCapabilities } from "@/lib/generation-capabilities";
 import { videoInputState, videoPromptReady } from "@/lib/video-model-rules";
-import { uploadFile } from "@/lib/api/storage";
 import { getApiErrorMessage } from "@/lib/api/api-error";
 import { resolveMediaUrl } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
@@ -32,14 +31,12 @@ import type {
 } from "./generation-types";
 import { GenerationAttachmentUploadMenu } from "./generation-attachment-upload-menu";
 import { GenerationQuickSettings } from "./generation-quick-settings";
+import { H3_REFERENCE_AUDIO_ACCEPT, uploadGenerationReference } from "./generation-reference-upload";
 
-const MEDIA_UPLOAD_CONFIG: Record<
-  SimpleAttachmentMediaType,
-  { accept: string; folder: string }
-> = {
-  image: { accept: "image/*", folder: "generation-references" },
-  video: { accept: "video/*", folder: "generation-video-references" },
-  audio: { accept: "audio/*", folder: "generation-audio-references" },
+const MEDIA_ACCEPT: Record<SimpleAttachmentMediaType, string> = {
+  image: "image/*",
+  video: "video/*",
+  audio: "audio/*",
 };
 
 interface GenerationSimpleComposerProps {
@@ -128,7 +125,6 @@ export function GenerationSimpleComposer({
     option?: SimpleAttachmentUploadOption,
   ) => {
     const mediaType = option?.mediaType || "image";
-    const config = MEDIA_UPLOAD_CONFIG[mediaType];
     const remaining =
       option?.remaining ??
       Math.max(0, maxImageAttachments - imageAttachmentCount);
@@ -143,7 +139,7 @@ export function GenerationSimpleComposer({
     setError("");
     try {
       const urls = await Promise.all(
-        selected.map((file) => uploadFile(file, config.folder)),
+        selected.map((file) => uploadGenerationReference(file, mediaType)),
       );
       onAddAttachments(urls, option?.kind);
     } catch (error) {
@@ -164,9 +160,10 @@ export function GenerationSimpleComposer({
     if (!input) {
       return;
     }
-    const config = MEDIA_UPLOAD_CONFIG[option.mediaType];
     selectedUploadOptionRef.current = option;
-    input.accept = config.accept;
+    input.accept = option.mediaType === "audio" && capabilities?.h3Ref
+      ? H3_REFERENCE_AUDIO_ACCEPT
+      : MEDIA_ACCEPT[option.mediaType];
     input.multiple = option.remaining > 1;
     input.click();
   };

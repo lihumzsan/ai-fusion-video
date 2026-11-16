@@ -59,11 +59,15 @@ public class ComfyUiWorkflowCapabilities {
         return describe(model, version, configured);
     }
 
+    /** 从指定版本计算工作流能力与模型可收紧的素材范围。 */
     public JSONObject describe(AiModel model, ComfyUiWorkflowVersion version, JSONObject configured) {
-        var bindings = documents.parseInputBindings(model.getModelType(), version.getApiWorkflowJson(),
-                version.getInputBindingsJson());
-        var fields = bindings.stream().map(ComfyUiInputBinding::businessField).distinct().toList();
+        boolean h3Ref = ComfyUiH3RefProfile.matches(model.getModelType(), version, documents);
+        var bindings = h3Ref ? List.<ComfyUiInputBinding>of() : documents.parseInputBindings(
+                model.getModelType(), version.getApiWorkflowJson(), version.getInputBindingsJson());
+        var fields = h3Ref ? ComfyUiH3RefProfile.INPUT_FIELDS
+                : bindings.stream().map(ComfyUiInputBinding::businessField).distinct().toList();
         JSONObject result = JSONUtil.parseObj(configured.toString());
+        result.remove("h3Ref");
         if (configured.get(LIMITS_KEY) != null && !JSONUtil.isNull(configured.get(LIMITS_KEY))
                 && !(configured.get(LIMITS_KEY) instanceof JSONObject)) {
             throw invalid("输入限制必须是 JSON 对象");
@@ -72,6 +76,12 @@ public class ComfyUiWorkflowCapabilities {
         validateLimitKeys(limits);
         JSONObject inputs = new JSONObject();
         for (String field : fields) {
+            if (h3Ref) {
+                inputs.set(field, MEDIA_FIELDS.contains(field) ? h3ReferenceInput(configured, limits, field)
+                        : new JSONObject().set("minimum", 0).set("minimumWhenProvided", 1)
+                                .set("maximum", 1).set("workflowMaximum", 1));
+                continue;
+            }
             var matching = bindings.stream().filter(binding -> field.equals(binding.businessField())).toList();
             if (matching.stream().anyMatch(binding -> "uploaded_video".equals(binding.valueType())
                     || "uploaded_audio".equals(binding.valueType()))) {
@@ -128,7 +138,8 @@ public class ComfyUiWorkflowCapabilities {
             result.set(MAXIMUM_KEYS.get(field), maximum);
         }
         JSONObject references = inputs.getJSONObject("referenceImages");
-        int workflowMinimum = references == null ? 0 : references.getInt("minimumWhenProvided", 0);
+        int workflowMinimum = references == null ? 0
+                : Math.max(references.getInt("minimum", 0), references.getInt("minimumWhenProvided", 0));
         Integer savedMinimum = nonNegative(configured.get("minReferenceImages"), "minReferenceImages");
         if (savedMinimum == null) {
             savedMinimum = nonNegative(configured.get("minRefImages"), "minRefImages");
@@ -153,7 +164,9 @@ public class ComfyUiWorkflowCapabilities {
         if (savedImageMinimum == null) {
             savedImageMinimum = nonNegative(configured.get("minImages"), "minImages");
         }
-        int imageMinimum = savedImageMinimum == null ? 0 : savedImageMinimum;
+        int workflowImageMinimum = h3Ref ? ComfyUiH3RefProfile.MIN_REFERENCE_IMAGES : 0;
+        int imageMinimum = savedImageMinimum == null ? workflowImageMinimum
+                : Math.max(workflowImageMinimum, savedImageMinimum);
         if (imageMaximum != null && imageMinimum > imageMaximum) {
             throw invalid("图片输入最少数量不能超过实际使用上限");
         }
@@ -168,7 +181,45 @@ public class ComfyUiWorkflowCapabilities {
         }
         result.set(VERSION_KEY, version.getId()).set("comfyuiWorkflowVersionNo", version.getVersionNo());
         result.set("comfyuiFields", fields).set(INPUTS_KEY, inputs);
+        if (h3Ref) {
+            applyH3VideoCapabilities(result);
+        }
         return result;
+    }
+
+    private JSONObject h3ReferenceInput(JSONObject configured, JSONObject limits, String field) {
+        boolean images = ComfyUiH3RefProfile.REFERENCE_IMAGES.equals(field);
+        int minimum = images ? ComfyUiH3RefProfile.MIN_REFERENCE_IMAGES : 0;
+        int workflowMaximum = images ? ComfyUiH3RefProfile.MAX_REFERENCE_IMAGES : ComfyUiH3RefProfile.MAX_REFERENCE_AUDIOS;
+        Integer usageLimit = limit(configured, limits, field);
+        int maximum = usageLimit == null ? workflowMaximum : Math.min(workflowMaximum, usageLimit);
+        if (maximum < minimum) {
+            throw invalid("H3 REF 需要至少一张参考图，不能禁用参考图输入");
+        }
+        return new JSONObject().set("minimum", minimum).set("minimumWhenProvided", 1)
+                .set("maximum", maximum).set("workflowMaximum", workflowMaximum).set("usageMaximum", usageLimit);
+    }
+
+    private void applyH3VideoCapabilities(JSONObject result) {
+        result.remove("supportedResolutions");
+        result.remove("resolutions");
+        result.remove("defaultResolution");
+        result.remove("supportedDurationsByResolution");
+        result.remove("maxDurationByResolution");
+        JSONObject videoRules = result.getJSONObject("videoRules");
+        if (videoRules == null) {
+            videoRules = new JSONObject();
+        }
+        result.set("h3Ref", true)
+                .set("minDuration", ComfyUiH3RefProfile.MIN_DURATION)
+                .set("maxDuration", ComfyUiH3RefProfile.MAX_DURATION)
+                .set("defaultDuration", ComfyUiH3RefProfile.DEFAULT_DURATION)
+                .set("supportedDurations", ComfyUiH3RefProfile.DURATIONS)
+                .set("supportedAspectRatios", ComfyUiH3RefProfile.ASPECT_RATIOS)
+                .set("referenceAudioRequiresVisualInput", true)
+                .set("videoRules", videoRules.set("version", 1).set("profile", "h3-ref")
+                        .set("defaultRatio", ComfyUiH3RefProfile.DEFAULT_RATIO).set("fixedGenerateAudio", true)
+                        .set("promptRequired", true));
     }
 
     private Integer limit(JSONObject configured, JSONObject limits, String field) {

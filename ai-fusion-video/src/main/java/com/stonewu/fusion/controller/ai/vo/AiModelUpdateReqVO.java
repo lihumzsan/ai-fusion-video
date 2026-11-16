@@ -8,6 +8,7 @@ import lombok.Data;
 import java.util.List;
 import java.util.Map;
 
+/** 更新已有 AI 模型配置。 */
 @Schema(description = "更新AI模型请求")
 @Data
 public class AiModelUpdateReqVO {
@@ -17,6 +18,7 @@ public class AiModelUpdateReqVO {
     private String code;
     private String modelProtocol;
     private String capabilityPresetCode;
+    @Schema(description = "1-文本对话，2-图片生成，3-视频生成，4-参考音频生成。已有模型与参考音频模型不能互相转换")
     private Integer modelType;
     private String icon;
     private String description;

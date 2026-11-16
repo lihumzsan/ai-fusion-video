@@ -61,19 +61,18 @@ export function GenerationQuickSettings({
             onChange={(ratio) => onFormChange({ ratio })}
           />
 
-          <GenerationQuickSelect
-            value={form.resolution}
-            placeholder="分辨率"
-            options={(capabilities?.supportedResolutions ?? []).map((value) => ({
-              value,
-              label: value,
-            }))}
-            contentClassName="min-w-28"
-            onChange={(resolution) => {
-              const duration = capabilities ? videoDurationForResolution(form.duration, capabilities, resolution) : form.duration;
-              onFormChange({ resolution, duration });
-            }}
-          />
+          {!!capabilities?.supportedResolutions.length && (
+            <GenerationQuickSelect
+              value={form.resolution}
+              placeholder="分辨率"
+              options={capabilities.supportedResolutions.map((value) => ({ value, label: value }))}
+              contentClassName="min-w-28"
+              onChange={(resolution) => {
+                const duration = videoDurationForResolution(form.duration, capabilities, resolution);
+                onFormChange({ resolution, duration });
+              }}
+            />
+          )}
         </>
       )}
 

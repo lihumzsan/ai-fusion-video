@@ -24,7 +24,7 @@ export function canvasNodeConfigurationIssue(
     !String(node.config.content ?? "").trim()
   )
     return `请填写${capability.label}内容`;
-  if (capability.configFields.modelId && !node.config.modelId)
+  if (capability.configFields.modelId && !node.config.modelId && node.kind !== "voiceGeneration")
     return "请选择模型";
   if (node.kind === "mcpTool" && !node.config.contractId)
     return "请选择要调用的外部工具";

@@ -1,6 +1,7 @@
 package com.stonewu.fusion.service.ai.comfyui;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
@@ -18,6 +19,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -129,6 +133,39 @@ class ComfyUiWorkflowServiceTests {
         assertThat(workflow.getStatus()).isEqualTo(1);
         verify(versionMapper).updateById(version);
         verify(workflowMapper).updateById(workflow);
+    }
+
+    @Test
+    void publishingAStoredLegacyDraftRequiresResavingButPublishedHistoryCanBeRestored() throws IOException {
+        var mapper = new ObjectMapper();
+        var api = ApiConfig.builder().id(7L).platform("comfyui").status(1).build();
+        var workflow = ComfyUiWorkflow.builder().id(12L).apiConfigId(7L).modelType(3).build();
+        String legacyGraph;
+        try (var template = getClass().getResourceAsStream("/comfyui/h3-reference-t8-dual-stage-2mp.json")) {
+            var graph = mapper.readTree(new String(template.readAllBytes(), StandardCharsets.UTF_8));
+            ((ObjectNode) graph.path("168")).remove("_meta");
+            legacyGraph = graph.toString();
+        }
+        var version = ComfyUiWorkflowVersion.builder().id(21L).workflowId(12L).published(false)
+                .apiWorkflowJson(legacyGraph).inputBindingsJson("{}")
+                .validationStatus(ComfyUiWorkflowVersion.VALIDATION_VALID)
+                .testStatus(ComfyUiWorkflowVersion.TEST_PASSED)
+                .testApiConfigHash(ProviderConfigurationFingerprint.of(api, new CanvasJson(mapper)))
+                .build();
+        when(workflowMapper.selectForUpdate(12L)).thenReturn(workflow);
+        when(versionMapper.selectById(21L)).thenReturn(version);
+        when(apiConfigService.getById(7L)).thenReturn(api);
+
+        assertThatThrownBy(() -> service.publishVersion(12L, 21L))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("重新保存草稿");
+        assertThat(version.getPublished()).isFalse();
+        assertThat(workflow.getActiveVersionId()).isNull();
+
+        version.setPublished(true);
+        service.publishVersion(12L, 21L);
+
+        assertThat(workflow.getActiveVersionId()).isEqualTo(21L);
+        assertThat(version.getApiWorkflowJson()).isEqualTo(legacyGraph);
     }
 
     @Test

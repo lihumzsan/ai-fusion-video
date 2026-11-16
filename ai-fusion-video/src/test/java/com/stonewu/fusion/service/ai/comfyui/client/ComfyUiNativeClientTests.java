@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.ApiConfig;
+import com.stonewu.fusion.service.generation.transport.GenerationProviderFailure;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -109,6 +110,20 @@ class ComfyUiNativeClientTests {
     }
 
     @Test
+    void submitPromptPreservesAnExplicitProviderRejection() {
+        server.createContext("/prompt", exchange -> json(exchange, 400,
+                "{\"error\":{\"message\":\"Invalid workflow input\"},\"node_errors\":{}}"));
+        ObjectNode prompt = objectMapper.createObjectNode();
+        prompt.putObject("1").put("class_type", "KSampler").putObject("inputs");
+
+        assertThatThrownBy(() -> client.submitPrompt(apiConfig, prompt, UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(GenerationProviderFailure.class, failure -> {
+                    assertThat(failure.httpStatus()).isEqualTo(400);
+                    assertThat(failure.reason()).isEqualTo("Invalid workflow input");
+                });
+    }
+
+    @Test
     void uploadImageUsesOfficialMultipartContractAndParsesDescriptor() {
         AtomicReference<String> authorization = new AtomicReference<>();
         AtomicReference<String> contentType = new AtomicReference<>();
@@ -149,6 +164,23 @@ class ComfyUiNativeClientTests {
     }
 
     @Test
+    void uploadAudioUsesTheNativeFilePartWithAudioMimeType() {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server.createContext("/upload/image", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            json(exchange, 200,
+                    "{\"name\":\"voice.wav\",\"subfolder\":\"ai-fusion-video\",\"type\":\"input\"}");
+        });
+
+        var result = client.uploadAudio(apiConfig, "wave-data".getBytes(StandardCharsets.UTF_8),
+                "voice.wav", "audio/wav", "ai-fusion-video");
+
+        assertThat(result.workflowValue()).isEqualTo("ai-fusion-video/voice.wav");
+        assertThat(requestBody.get()).contains("name=\"image\"; filename=\"voice.wav\"",
+                "Content-Type: audio/wav", "wave-data");
+    }
+
+    @Test
     void getJobParsesOfficialCompletedOutputs() {
         String promptId = UUID.randomUUID().toString();
         server.createContext("/api/jobs/" + promptId, exchange -> json(exchange, 200,
@@ -172,6 +204,21 @@ class ComfyUiNativeClientTests {
         assertThatThrownBy(() -> client.getJob(apiConfig, promptId))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("未知状态");
+    }
+
+    @Test
+    void findJobDistinguishesNativeQueueRemovalFromProxyNotFound() {
+        String removed = UUID.randomUUID().toString();
+        String proxy = UUID.randomUUID().toString();
+        server.createContext("/api/jobs/" + removed, exchange -> json(exchange, 404,
+                "{\"error\":\"Job not found\"}"));
+        server.createContext("/api/jobs/" + proxy, exchange -> json(exchange, 404,
+                "{\"error\":\"Missing proxy route\"}"));
+
+        assertThat(client.findJob(apiConfig, removed)).isEmpty();
+        assertThatThrownBy(() -> client.findJob(apiConfig, proxy))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("HTTP 404");
     }
 
     @Test

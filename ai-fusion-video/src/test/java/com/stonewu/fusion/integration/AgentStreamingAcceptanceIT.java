@@ -159,7 +159,7 @@ class AgentStreamingAcceptanceIT {
     private HttpResponse<InputStream> start(HttpClient http, String conversation, String type) throws Exception {
         String body = json.writeValueAsString(Map.of("conversationId", conversation, "message", "验证连续输出", "modelId", ID,
                 "projectId", ID, "agentType", type, "category", "assistant", "enableTools", true, "toolExecutionMode", "FULL_ACCESS",
-                "context", Map.of("scriptId", ID)));
+                "context", Map.of("scriptId", ID, "scriptVersion", 0)));
         return http.send(request("/api/ai/pipeline/run").header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofInputStream());
     }

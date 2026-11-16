@@ -8,6 +8,7 @@ import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.entity.storage.StorageConfig;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiInputResourceService;
 import com.stonewu.fusion.service.ai.proxy.AiProxySupport;
 import com.stonewu.fusion.service.canvas.model.CanvasActor;
 import com.stonewu.fusion.service.generation.job.RemoteGenerationJob;
@@ -104,6 +105,8 @@ public class ReferenceImageTransportService {
         }
         ReferenceImageTransportCapability capability = resolveCapability(modelConfig);
         List<String> resolved = new ArrayList<>();
+        long managedImageLimit = modelConfig != null && Boolean.TRUE.equals(modelConfig.getBool("h3Ref"))
+                ? ComfyUiInputResourceService.MAX_IMAGE_BYTES : MediaIntakeService.MAX_UPLOAD_BYTES;
         for (int index = 0; index < sources.size(); index++) {
             try {
                 TransportSelection selection = selectTransport(model, capability, sources.get(index));
@@ -113,8 +116,7 @@ public class ReferenceImageTransportService {
                     }
                     resolved.add(selection.transport() == ReferenceImageTransport.URL
                             ? media.generationUrl(selection.value(), actor, MediaKind.IMAGE, claim)
-                            : media.dataUri(selection.value(), actor, MediaKind.IMAGE,
-                            MediaIntakeService.MAX_UPLOAD_BYTES));
+                            : media.dataUri(selection.value(), actor, MediaKind.IMAGE, managedImageLimit));
                 } else if (selection.transport() == ReferenceImageTransport.URL) {
                     resolved.add(selection.value());
                 } else {

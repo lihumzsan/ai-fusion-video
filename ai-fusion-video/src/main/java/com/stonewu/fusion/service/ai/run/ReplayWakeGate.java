@@ -67,6 +67,8 @@ final class ReplayWakeGate {
                             installed.asMono(),
                             Mono.delay(safeInterval).thenReturn(0L))
                     .map(this::consumeAfterWake)
+                    // Release before the next replay cycle can subscribe on this same signal.
+                    .doOnSuccess(ignored -> waiter.compareAndSet(installed, null))
                     .doFinally(ignored -> waiter.compareAndSet(installed, null));
         });
     }

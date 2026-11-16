@@ -149,6 +149,12 @@ https://github.com/user-attachments/assets/acd181a0-541c-4163-a000-fa9ed72a5106
 
 创作时，在生成工具或画布中选择这个模型即可使用工作流。页面会提示所需素材和参考图数量，方便一次准备好输入。
 
+使用 MiniMax H3 REF 时，新建视频工作流，选择「导入 H3 REF 工作流」。工作流按每次任务的输入接收 1–9 张参考图和 0–3 段 MP3 或 WAV 参考音频。每段音频至少 2 秒，总长最多 15 秒。提示词用 `<Picture 1>` 和 `<Audio 1>` 等标记引用对应顺序的素材。试运行并发布后，在画布添加 ComfyUI 节点，结果类型选择视频，再选用绑定了该工作流的模型。
+
+在「系统设置 → AI 配置」的 ComfyUI 配置下添加「音频生成」模型 Qwen3-TTS VoiceDesign 1.7B。然后在画布添加「生成参考音频」，选用该模型，填写声音描述、试听台词和语言。将节点的「音频」输出连到 H3 节点的「参考音频」输入。试听台词用于生成音色样本，视频对白仍写在 H3 提示词中。已有直接绑定 ComfyUI 服务的参考音频节点可继续使用，也可以切换为模型绑定。
+
+参考音频节点内置 Qwen3-TTS VoiceDesign 工作流。ComfyUI 端需安装 [ComfyUI-Qwen-TTS](https://github.com/flybirdxx/ComfyUI-Qwen-TTS) 并提供 [Qwen3-TTS 1.7B VoiceDesign 模型](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign)，应用服务用 FFmpeg 将原生 SaveAudio 的 FLAC 转为 WAV。
+
 ### 其他功能
 
 | 模块 | 当前能力 |
@@ -166,6 +172,10 @@ https://github.com/user-attachments/assets/acd181a0-541c-4163-a000-fa9ed72a5106
 模型和 API 接入信息统一在设置页管理，无需将密钥写入源码。对话与 Agent 支持 OpenAI 兼容接口、Anthropic、Gemini、DashScope 和 Ollama 等模型服务；图片与视频生成支持接入多种服务，并按能力在项目中选用相应模型。
 
 具体可用模型取决于服务商账号、接口地址和模型权限。
+
+本地开发时，助手、剧本解析、分镜和画布的文本能力都可以使用「本机 Codex」。让 Java 后端与 Codex CLI 在同一个宿主机用户下运行，先执行 `codex login` 或用 `codex login status` 确认已通过 ChatGPT 登录。然后在「设置 → AI 配置」添加「本机 Codex」，填写账号可用的模型标识。可在支持选择模型的入口选用它，也可设为默认模型，供未指定模型的文本任务使用。此配置无需填写 API 地址或 API Key。
+
+如果 Java 进程的 `PATH` 里没有 `codex`，启动后端时将 `FUSION_CODEX_EXECUTABLE` 设为 Codex CLI 的绝对路径。模型推理使用 ChatGPT 账号的 Codex 服务。
 
 ### 存储
 
@@ -263,16 +273,24 @@ docker compose -f docker-compose.build.yml -f docker-compose.separated.yml up -d
 ### 环境要求
 
 - JDK 21
-- Node.js 20 和 pnpm 10
+- Node.js 22.13 或更高版本，pnpm 版本以 `ai-fusion-video-web/package.json` 为准
 - Docker，用于启动本地 MySQL 与 Redis
 - FFmpeg 和 FFprobe，用于视频合成与媒体探测
+
+### 在 IntelliJ IDEA 中启动
+
+1. 用 IDEA 打开仓库根目录，将 `ai-fusion-video/pom.xml` 添加为 Maven 项目。项目 SDK、Maven 导入和 Maven Runner 都选择 JDK 21。
+2. 启动 MySQL 和 Redis。首次启动可在下面的命令中执行 `docker compose`。前端首次安装依赖时，在 `ai-fusion-video-web` 中执行 `pnpm install --frozen-lockfile`。
+3. 在 `Run → Edit Configurations` 中添加 **Application** 启动项。模块为 `ai-fusion-video`，主类为 `com.stonewu.fusion.FusionVideoApplication`，工作目录为 `$PROJECT_DIR$/ai-fusion-video`，Program arguments 为 `--spring.profiles.active=local --server.address=127.0.0.1`。如果 IDEA 无法直接找到 `codex`，在后端启动项中用 `FUSION_CODEX_EXECUTABLE` 指定已登录的 Codex CLI 路径。FFmpeg 和 FFprobe 路径也可以在此配置。
+4. 添加 **Shell Script** 启动项。工作目录为 `$PROJECT_DIR$/ai-fusion-video-web`，命令为 `pnpm dev --hostname 127.0.0.1 --port 3000`，并确保本机 Node.js 和 pnpm 在该启动项的 `PATH` 中。也可以在 IDEA 的 Terminal 中执行同一命令。前端代理使用 `DEV_BACKEND_URL=http://127.0.0.1:18080`。
+5. 分别运行后端和前端，或将两项加入 **Compound** 一次启动。调试 Java 时，对后端启动项使用 **Debug**。打开 [本地前端](http://127.0.0.1:3000)。
 
 ### 启动依赖和后端
 
 ```bash
 cd ai-fusion-video
 docker compose -f docker-compose-middleware.yml up -d
-./mvnw spring-boot:run
+sh ./mvnw spring-boot:run
 ```
 
 Windows 环境可以运行 `.\mvnw.cmd spring-boot:run`。

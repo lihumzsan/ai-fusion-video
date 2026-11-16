@@ -17,7 +17,7 @@ public enum CanvasNodeKind {
     ASSET_IMAGE_GENERATE("assetImageGenerate"), FRAME_GENERATE("frameGenerate"),
     IMAGE_GENERATION("imageGeneration"), VIDEO_GENERATION("videoGeneration"),
     COMFYUI("comfyui"), FRAME_EXTRACT("frameExtract"), IMAGE_TRANSFORM("imageTransform"),
-    MUSIC_GENERATION("musicGeneration"), SFX_GENERATION("sfxGeneration"),
+    MUSIC_GENERATION("musicGeneration"), SFX_GENERATION("sfxGeneration"), VOICE_GENERATION("voiceGeneration"),
     AUDIO_MIX("audioMix"), VIDEO_COMPOSE("videoCompose"), EXPORT("export"),
     AGENT("agent"), MCP_TOOL("mcpTool"), SELECTION("selection"), COLLECTION("collection"), FOREACH("foreach"),
     WRITEBACK("writeback"), GROUP("group"), NOTE("note");

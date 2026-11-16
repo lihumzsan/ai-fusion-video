@@ -303,15 +303,6 @@ public final class AgentScopePipelineRunService {
         var canvasScope = canvasScopes.resume(previous.getCanvasScopeJson(), previous.getProjectId(),
                 new CanvasActor(userId, previous.getActorTeamId()));
         String input = "继续";
-        conversations.createOrUpdate(
-                previous.getConversationId(),
-                userId,
-                previous.getProjectId(),
-                previous.getProjectId() == null ? null : "project",
-                previous.getProjectId(),
-                previous.getAgentType(),
-                null,
-                null);
         Instant deadline = AgentExecutionLimits.deadlineFrom(Instant.now(), properties.getExecution().getRunTimeout());
         String runId = IdUtil.fastSimpleUUID();
         StartAgentRunCommand admission = new StartAgentRunCommand(
@@ -385,6 +376,7 @@ public final class AgentScopePipelineRunService {
         return ToolExecutionMode.parse(request.getToolExecutionMode());
     }
 
+    /** 解析已启用且可以编排智能体工具的对话模型。 */
     private AiModel model(Long modelId) {
         AiModel model = modelId == null
                 ? modelService.getDefaultByType(1)
@@ -397,6 +389,7 @@ public final class AgentScopePipelineRunService {
         if (!Integer.valueOf(1).equals(model.getStatus())) {
             throw new BusinessException("AI 模型未启用: " + model.getId());
         }
+        modelService.requireAgentModel(model);
         return model;
     }
 

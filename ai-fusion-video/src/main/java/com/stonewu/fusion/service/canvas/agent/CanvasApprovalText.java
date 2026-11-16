@@ -147,6 +147,7 @@ public class CanvasApprovalText {
             Map.entry("itemId", "子资产"),
             Map.entry("itemType", "变体类别"),
             Map.entry("items", "子项"),
+            Map.entry("language", "语种"),
             Map.entry("last", "尾帧"),
             Map.entry("lastFrameImageUrl", "尾帧"),
             Map.entry("lastFramePrompt", "尾帧提示词"),
@@ -185,6 +186,7 @@ public class CanvasApprovalText {
             Map.entry("planHash", "运行计划校验值"),
             Map.entry("planId", "运行计划编号"),
             Map.entry("pose", "姿势"),
+            Map.entry("previewText", "试听台词"),
             Map.entry("projectId", "项目"),
             Map.entry("prompt", "提示词"),
             Map.entry("prop", "道具"),
@@ -262,6 +264,7 @@ public class CanvasApprovalText {
             Map.entry("videoModelId", "视频生成模型"),
             Map.entry("videoPrompt", "视频提示词"),
             Map.entry("videoUrl", "镜头视频"),
+            Map.entry("voiceDescription", "音色描述"),
             Map.entry("watermark", "水印"),
             Map.entry("width", "宽度"),
             Map.entry("workflowParameters", "工作流设置"),
@@ -269,6 +272,17 @@ public class CanvasApprovalText {
             Map.entry("x", "裁剪左边距"),
             Map.entry("y", "裁剪上边距"));
     private static final Map<String, String> CHOICES = Map.ofEntries(
+            Map.entry("Auto", "自动识别"),
+            Map.entry("Chinese", "中文"),
+            Map.entry("English", "英语"),
+            Map.entry("Japanese", "日语"),
+            Map.entry("Korean", "韩语"),
+            Map.entry("German", "德语"),
+            Map.entry("French", "法语"),
+            Map.entry("Russian", "俄语"),
+            Map.entry("Portuguese", "葡萄牙语"),
+            Map.entry("Spanish", "西班牙语"),
+            Map.entry("Italian", "意大利语"),
             Map.entry("INHERIT", "跟随智能体"),
             Map.entry("CUSTOM", "单独指定"),
             Map.entry("JSON_OBJECT", "传入完整参数"),
@@ -400,8 +414,7 @@ public class CanvasApprovalText {
             return models.require(value.asLong()).name();
         }
         if (key.equals("apiConfigId")) {
-            return models.audioServices().stream().filter(item -> item.id() == value.asLong()).findFirst()
-                    .orElseThrow(() -> new BusinessException(400, "所选音频服务不可用，请重新选择")).name();
+            return models.audioServiceName(value.asLong());
         }
         if (key.equals("resourceId")) {
             return media.get(value.asText(), actor).name();
@@ -471,7 +484,7 @@ public class CanvasApprovalText {
             return media.get(text.substring(8).split("/")[0], actor).name();
         }
         if (Set.of("valueType", "targetType", "inputType", "resultType", "operationKind", "agentType", "frameType",
-                "fit", "operation", "inputMode", "format", "skillMode").contains(key)) {
+                "fit", "operation", "inputMode", "format", "skillMode", "language").contains(key)) {
             return choiceLabel(text);
         }
         return text;

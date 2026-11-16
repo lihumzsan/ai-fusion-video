@@ -12,6 +12,7 @@ import com.stonewu.fusion.service.canvas.run.mcp.CanvasMcpData.Idempotency;
 import com.stonewu.fusion.service.canvas.run.mcp.CanvasMcpData.OutputMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -35,7 +36,7 @@ class CacheConfigTests {
 
         assertThat(roundTrip(serializer, immutable)).isEqualTo(immutable);
         assertThat(roundTrip(serializer, concrete)).isEqualTo(concrete);
-        var providers = new ProviderCatalogService(new ObjectMapper()).list();
+        var providers = new ProviderCatalogService(new ObjectMapper(), new MockEnvironment()).list();
         assertThat(roundTrip(serializer, providers)).isEqualTo(providers);
     }
 

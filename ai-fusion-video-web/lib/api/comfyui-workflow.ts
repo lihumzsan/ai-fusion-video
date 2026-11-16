@@ -52,6 +52,7 @@ export interface ComfyUiWorkflowVersion {
   inputBindingsJson: string;
   outputBindingsJson: string;
   requiredNodesJson: string;
+  h3Ref: boolean;
   workflowHash: string;
   validationStatus: number;
   validationMessage: string | null;
@@ -143,6 +144,9 @@ export interface ComfyUiConnectionResult {
 }
 
 export const comfyUiWorkflowApi = {
+  h3RefPreset: (apiConfigId: number) => http.get<never, string>("/api/ai/comfyui/workflow/presets/h3-ref", {
+    params: { apiConfigId },
+  }),
   page: (pageNo = 1, pageSize = 100, apiConfigId?: number) => {
     const query = new URLSearchParams({
       pageNo: String(pageNo),

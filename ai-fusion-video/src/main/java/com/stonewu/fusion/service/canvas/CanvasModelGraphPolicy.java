@@ -3,6 +3,7 @@ package com.stonewu.fusion.service.canvas;
 import cn.hutool.json.JSONObject;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.common.BusinessException;
+import com.stonewu.fusion.service.canvas.agent.node.CanvasAgentNodeTypes;
 import com.stonewu.fusion.service.canvas.capability.CanvasBatchDefinition;
 import com.stonewu.fusion.service.canvas.capability.CanvasCapabilityRegistry;
 import com.stonewu.fusion.service.canvas.capability.CanvasConfigValidator;
@@ -24,7 +25,8 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
     private static final Map<CanvasNodeKind, String> KINDS = Map.of(
             CanvasNodeKind.IMAGE_GENERATION, "image", CanvasNodeKind.VIDEO_GENERATION, "video",
             CanvasNodeKind.TEXT_GENERATION, "text", CanvasNodeKind.COMFYUI, "comfyui",
-            CanvasNodeKind.MUSIC_GENERATION, "audio", CanvasNodeKind.SFX_GENERATION, "audio");
+            CanvasNodeKind.MUSIC_GENERATION, "audio", CanvasNodeKind.SFX_GENERATION, "audio",
+            CanvasNodeKind.VOICE_GENERATION, "voice");
     private final CanvasModelCatalog models;
     private final CanvasCapabilityRegistry registry;
 
@@ -33,16 +35,27 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
         for (var node : mutation.changes().upsertedNodes()) {
             var old = before.nodes().stream().filter(item -> item.id().equals(node.id())).findFirst().orElse(null);
             String kind = KINDS.get(node.kind());
-            if (kind == null) {
+            boolean agent = CanvasAgentNodeTypes.KINDS.contains(node.kind());
+            if (kind == null && !agent) {
                 continue;
             }
-            String field = kind.equals("audio") ? "apiConfigId" : "modelId";
-            if (!node.config().has(field) || old != null && old.kind() == node.kind()
-                    && Objects.equals(old.config().get(field), node.config().get(field))) {
+            boolean voice = node.kind() == CanvasNodeKind.VOICE_GENERATION;
+            boolean audioApi = "audio".equals(kind);
+            String field = audioApi ? "apiConfigId" : "modelId";
+            if (!voice && !node.config().has(field)) {
+                continue;
+            }
+            if (old != null && old.kind() == node.kind()
+                    && Objects.equals(old.config().get(field), node.config().get(field))
+                    && (!voice || Objects.equals(old.config().get("apiConfigId"), node.config().get("apiConfigId")))) {
                 continue;
             }
             try {
-                if (kind.equals("audio")) {
+                if (voice) {
+                    validateVoiceSelection(node.config(), false);
+                } else if (agent) {
+                    CanvasModelCatalog.requireAgentModel(models.require(node.config().path(field).asLong()));
+                } else if (audioApi) {
                     models.requireAudio(node.config().path(field).asLong());
                 } else if (!kind.equals(models.require(node.config().path(field).asLong()).kind())) {
                     fail("模型类型与节点不匹配；ComfyUI 请使用工作流节点");
@@ -85,11 +98,21 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
     }
 
     private void validateProviderSelection(CanvasNode node) {
+        if (CanvasAgentNodeTypes.KINDS.contains(node.kind())) {
+            if (node.config().hasNonNull("modelId")) {
+                CanvasModelCatalog.requireAgentModel(models.require(node.config().path("modelId").asLong()));
+            }
+            return;
+        }
         String kind = KINDS.get(node.kind());
         if (kind == null) {
             return;
         }
-        if (kind.equals("audio")) {
+        if (node.kind() == CanvasNodeKind.VOICE_GENERATION) {
+            validateVoiceSelection(node.config(), false);
+            return;
+        }
+        if ("audio".equals(kind)) {
             if (node.config().hasNonNull("apiConfigId")) {
                 models.requireAudio(node.config().path("apiConfigId").asLong());
             }
@@ -149,10 +172,15 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
     }
 
     public void validateConfigured(CanvasNode node, Map<String, Integer> counts) {
-        if (!KINDS.containsKey(node.kind())) {
+        String kind = KINDS.get(node.kind());
+        if (kind == null) {
             return;
         }
-        if ("audio".equals(KINDS.get(node.kind()))) {
+        if (node.kind() == CanvasNodeKind.VOICE_GENERATION) {
+            validateVoiceSelection(node.config(), true);
+            return;
+        }
+        if ("audio".equals(kind)) {
             if (!node.config().has("apiConfigId")) {
                 fail("请选择音频服务");
             }
@@ -163,7 +191,7 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
             fail("请为“" + node.title() + "”选择模型");
         }
         var model = models.require(node.config().path("modelId").asLong());
-        if (!Objects.equals(KINDS.get(node.kind()), model.kind())) {
+        if (!Objects.equals(kind, model.kind())) {
             fail("模型类型与节点不匹配；ComfyUI 请使用工作流节点");
         }
         if ("comfyui".equals(model.kind())) {
@@ -205,6 +233,11 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
         }
         if (model.parameters().get("maxImageInputs") instanceof Number max && images > max.intValue()) {
             fail("图片输入总量超过当前模型限制");
+        }
+        var referenceImages = inputs.get("referenceImages");
+        if ("comfyui".equals(model.kind()) && referenceImages != null && referenceImages.minimum() > 0
+                && !connected.contains("referenceImages")) {
+            fail("请至少连接 " + referenceImages.minimum() + " 张参考图");
         }
         if (Boolean.TRUE.equals(model.parameters().get("exclusiveInputModes"))
                 && (connected.contains("firstFrame") || connected.contains("lastFrame"))
@@ -252,6 +285,20 @@ public class CanvasModelGraphPolicy implements CanvasGraphMutationPolicy {
         if (node.config().path("cameraFixed").asBoolean() && Boolean.FALSE.equals(
                 model.parameters().get("supportCameraFixed"))) {
             fail("当前模型不支持固定镜头参数");
+        }
+    }
+
+    /** 既有节点及模板继续校验原 ComfyUI 服务；模型配置与服务配置互斥。 */
+    private void validateVoiceSelection(ObjectNode config, boolean required) {
+        if (config.has("modelId")) {
+            if (config.has("apiConfigId")) {
+                fail("音色模型与旧版 ComfyUI 服务只能选择一个");
+            }
+            models.requireVoiceModel(config.path("modelId").asLong());
+        } else if (config.has("apiConfigId")) {
+            models.requireVoice(config.path("apiConfigId").asLong());
+        } else if (required) {
+            fail("请选择生成参考音频的音色模型");
         }
     }
 

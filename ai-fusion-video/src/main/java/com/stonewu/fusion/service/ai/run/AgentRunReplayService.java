@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -61,18 +62,20 @@ public class AgentRunReplayService {
             AtomicLong deliveredTerminal = new AtomicLong(
                     afterSequence == 0 ? 0 : afterSequence);
             ReplayWakeGate gate = new ReplayWakeGate();
-            java.util.concurrent.atomic.AtomicBoolean firstSnapshot =
-                    new java.util.concurrent.atomic.AtomicBoolean(true);
+            AtomicBoolean firstSnapshot = new AtomicBoolean(true);
+            AtomicBoolean complete = new AtomicBoolean();
             // 初次历史读取不等待 Redis 订阅握手；订阅尚未就绪时，原有周期读取仍检查同一日志游标。
             return Flux.using(
                     () -> subscribeWakeups(
                             safeRunId, signals.wakeupsWhenSubscribed(safeRunId).flatMapMany(value -> value), gate),
-                    ignored -> replayCycle(
+                    // Each cycle completes before resubscribing so long waits do not retain old subscriptions.
+                    ignored -> Flux.defer(() -> replayCycle(
                             safeRunId,
                             cursor,
                             deliveredTerminal,
                             gate,
-                            firstSnapshot),
+                            firstSnapshot,
+                            complete)).repeat(() -> !complete.get()),
                     Disposable::dispose);
         });
     }
@@ -96,7 +99,8 @@ public class AgentRunReplayService {
             AtomicLong cursor,
             AtomicLong deliveredTerminal,
             ReplayWakeGate gate,
-            java.util.concurrent.atomic.AtomicBoolean firstSnapshot) {
+            AtomicBoolean firstSnapshot,
+            AtomicBoolean complete) {
         return loadSnapshot(runId)
                 .flatMapMany(snapshot -> {
                     if (firstSnapshot.getAndSet(false)
@@ -113,13 +117,13 @@ public class AgentRunReplayService {
                             deliveredTerminal,
                             snapshot)
                             : Flux.empty();
-                    return drained.concatWith(Flux.defer(() -> afterDrain(
+                    return drained.concatWith(Mono.defer(() -> afterDrain(
                             runId,
                             cursor,
                             deliveredTerminal,
                             gate,
                             snapshot,
-                            firstSnapshot)));
+                            complete)).then(Mono.empty()));
                 });
     }
 
@@ -149,58 +153,46 @@ public class AgentRunReplayService {
                 });
     }
 
-    private Flux<CommittedAgentEvent> afterDrain(
+    private Mono<Void> afterDrain(
             String runId,
             AtomicLong cursor,
             AtomicLong deliveredTerminal,
             ReplayWakeGate gate,
             ReplaySnapshot drainedSnapshot,
-            java.util.concurrent.atomic.AtomicBoolean firstSnapshot) {
+            AtomicBoolean complete) {
         Long terminalSequence = drainedSnapshot.terminalSequence();
         if (terminalSequence != null
                 && deliveredTerminal.get() >= terminalSequence) {
-            return confirmTerminalTailEmpty(
-                    runId, cursor, deliveredTerminal, gate, firstSnapshot);
+            return confirmTerminalTailEmpty(runId, cursor, deliveredTerminal, complete);
         }
-        return awaitNextCycle(
-                runId, cursor, deliveredTerminal, gate, firstSnapshot);
+        return awaitNextCycle(cursor, gate);
     }
 
-    private Flux<CommittedAgentEvent> confirmTerminalTailEmpty(
+    private Mono<Void> confirmTerminalTailEmpty(
             String runId,
             AtomicLong cursor,
             AtomicLong deliveredTerminal,
-            ReplayWakeGate gate,
-            java.util.concurrent.atomic.AtomicBoolean firstSnapshot) {
+            AtomicBoolean complete) {
         return loadSnapshot(runId)
-                .flatMapMany(confirmed -> {
+                .doOnNext(confirmed -> {
                     acknowledgeCursorTerminal(
                             cursor.get(), deliveredTerminal, confirmed);
                     Long terminalSequence = confirmed.terminalSequence();
-                    if (terminalSequence != null
+                    complete.set(terminalSequence != null
                             && deliveredTerminal.get() >= terminalSequence
-                            && confirmed.latestSequence() <= cursor.get()) {
-                        return Flux.empty();
-                    }
-                    return replayCycle(
-                            runId, cursor, deliveredTerminal, gate, firstSnapshot);
-                });
+                            && confirmed.latestSequence() <= cursor.get());
+                }).then();
     }
 
-    private Flux<CommittedAgentEvent> awaitNextCycle(
-            String runId,
+    private Mono<Void> awaitNextCycle(
             AtomicLong cursor,
-            AtomicLong deliveredTerminal,
-            ReplayWakeGate gate,
-            java.util.concurrent.atomic.AtomicBoolean firstSnapshot) {
+            ReplayWakeGate gate) {
         return gate.awaitDirtyOrPoll(POLL_INTERVAL)
-                .flatMapMany(sequenceHint -> {
+                .doOnNext(sequenceHint -> {
                     if (sequenceHint > 0 && sequenceHint <= cursor.get()) {
                         metrics.replayDuplicateSuppressed();
                     }
-                    return Flux.defer(() -> replayCycle(
-                            runId, cursor, deliveredTerminal, gate, firstSnapshot));
-                });
+                }).then();
     }
 
     private Mono<ReplaySnapshot> loadSnapshot(String runId) {

@@ -2,11 +2,13 @@ package com.stonewu.fusion.service.ai.agentscope.message;
 
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
+import com.stonewu.fusion.service.ai.provider.codex.CodexTextFailure;
 import com.stonewu.fusion.service.ai.run.model.AgentModelRequests;
 import io.agentscope.core.agent.AgentBase;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.model.*;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -109,6 +111,13 @@ public final class TrackedAgentChatModel extends ChatModelBase implements AutoCl
                             (claim, error) -> recorded(() -> {
                                 if (error == invalidResponse.get()) {
                                     requests.completed(claim, usage.get());
+                                } else if (Exceptions.unwrap(error) instanceof CodexTextFailure confirmed) {
+                                    ChatUsage observed = confirmed.observedUsage();
+                                    if (observed == null) {
+                                        requests.failed(claim);
+                                    } else {
+                                        requests.completed(claim, observed);
+                                    }
                                 } else if (AgentModelHttpFailure.status(error) != null) {
                                     requests.failed(claim);
                                 } else {

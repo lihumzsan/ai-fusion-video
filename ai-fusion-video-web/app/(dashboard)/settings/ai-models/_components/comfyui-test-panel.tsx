@@ -13,7 +13,11 @@ import {
 } from "@/components/ui/dialog";
 import type { ComfyUiWorkflowVersion } from "@/lib/api/comfyui-workflow";
 import { getApiErrorMessage } from "@/lib/api/api-error";
-import { comfyUiTestInput } from "@/lib/comfyui-test-request";
+import {
+  comfyUiTestInput,
+  h3ReferenceTestFields,
+  type ComfyUiTestField,
+} from "@/lib/comfyui-test-request";
 import { parseInputBindingsJson } from "./comfyui-workflow-support";
 import { ComfyUiTestFields } from "./comfyui-test-fields";
 import { ComfyUiTestHistory } from "./comfyui-test-history";
@@ -29,37 +33,49 @@ export function ComfyUiTestPanel({
   onUpdated: () => void | Promise<void>;
 }) {
   const tests = useComfyUiTests(version.id, onUpdated);
-  const [values, setValues] = useState<Record<string, string>>({
-    prompt: "一张电影感的测试画面",
-  });
+  const h3Ref = version.h3Ref;
+  const [values, setValues] = useState<Record<string, string>>((): Record<string, string> =>
+    h3Ref
+      ? {
+          prompt: "subject_definitions:\n<Subject 1> is represented by <Picture 1>.\n\ndetailed_description:\n[Shot 1] The camera slowly moves toward <Subject 1>.",
+          duration: "5",
+          ratio: "16:9",
+        }
+      : { prompt: "一张电影感的测试画面" },
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<"withdraw" | "clear" | null>(
     null,
   );
   const [uploads, setUploads] = useState<string[]>([]);
   const parsed = useMemo(() => {
+    if (h3Ref) {
+      return { fields: h3ReferenceTestFields, error: null };
+    }
     try {
       const bindings = parseInputBindingsJson(version.inputBindingsJson);
-      const fields = Object.entries(bindings).map(([name, items]) => {
+      const fields = Object.entries(bindings).map<ComfyUiTestField>(([name, items]) => {
         if (
           !items[0] ||
           items.some((item) => item.valueType !== items[0].valueType)
-        )
+        ) {
           throw new Error(`字段 ${name} 的绑定类型不一致，请先修复版本。`);
+        }
         if (
           items[0].valueType === "uploaded_video" ||
           items[0].valueType === "uploaded_audio"
-        )
+        ) {
           throw new Error(
             "当前 ComfyUI Native API 尚不支持视频或音频上传绑定。",
           );
+        }
         return { name, type: items[0].valueType };
       });
       return { fields, error: null };
     } catch (error) {
       return { fields: [], error: getApiErrorMessage(error) };
     }
-  }, [version.inputBindingsJson]);
+  }, [h3Ref, version.inputBindingsJson]);
   const blocked =
     disabled ||
     tests.loading ||
@@ -72,7 +88,23 @@ export function ComfyUiTestPanel({
       const inputs: Record<string, unknown> = {};
       for (const field of parsed.fields) {
         const raw = values[field.name]?.trim();
-        if (raw) inputs[field.name] = comfyUiTestInput(raw, field.type);
+        if (!raw) {
+          if (h3Ref && (field.name === "prompt" || field.name === "referenceImages")) {
+            throw new Error("请填写提示词并至少添加一张参考图片。");
+          }
+          continue;
+        }
+        const input = comfyUiTestInput(raw, field.type);
+        if (Array.isArray(input) && field.maximum !== undefined && input.length > field.maximum) {
+          throw new Error(`参考${field.type === "uploaded_audio" ? "音频" : "图片"}最多可添加 ${field.maximum} 项。`);
+        }
+        if (typeof input === "number" && field.name === "duration" && h3Ref && (input < 4 || input > 15)) {
+          throw new Error("H3 REF 时长必须在 4–15 秒之间。");
+        }
+        if (field.type === "uploaded_audio" && Array.isArray(input) && input.some((item) => !/^media:\/\/[0-9a-f-]{36}$/.test(item))) {
+          throw new Error("请上传 MP3 或 WAV 音频，或填写已登记的音频素材引用。");
+        }
+        inputs[field.name] = input;
       }
       setFormError(null);
       await tests.submit(version.workflowHash, inputs);

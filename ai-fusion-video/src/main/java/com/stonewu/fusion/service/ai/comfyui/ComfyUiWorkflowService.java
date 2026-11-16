@@ -272,6 +272,7 @@ public class ComfyUiWorkflowService {
         versionMapper.updateById(version);
     }
 
+    /** 发布已通过当前目标校验和试运行的版本，保留历史版本已冻结的输入模式。 */
     @Transactional
     @CacheEvict(value = {"comfyUiWorkflow", "comfyUiWorkflowVersion"}, allEntries = true)
     public void publishVersion(Long workflowId, Long versionId) {
@@ -282,6 +283,9 @@ public class ComfyUiWorkflowService {
         }
         if (!workflowId.equals(version.getWorkflowId())) {
             throw new BusinessException(400, "工作流版本不属于指定工作流");
+        }
+        if (ComfyUiH3RefProfile.requiresProfileOnPublication(workflow.getModelType(), version, documentService)) {
+            throw new BusinessException(409, "请重新保存草稿以固化工作流输入模式，并完成在线校验与试运行后发布");
         }
         if (!Integer.valueOf(ComfyUiWorkflowVersion.VALIDATION_VALID)
                 .equals(version.getValidationStatus())) {

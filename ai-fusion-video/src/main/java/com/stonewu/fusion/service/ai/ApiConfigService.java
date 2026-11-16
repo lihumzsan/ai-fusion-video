@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.common.PageResult;
+import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
+import com.stonewu.fusion.mapper.ai.AiModelMapper;
 import com.stonewu.fusion.mapper.ai.ApiConfigMapper;
 import com.stonewu.fusion.service.ai.proxy.AiProxySupport;
 import com.stonewu.fusion.service.ai.catalog.ProviderCatalogService;
@@ -17,18 +19,26 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
+import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
+
+/** 管理模型供应商接入方式和能力协议。 */
 @Service
 @RequiredArgsConstructor
 public class ApiConfigService {
 
     private final ApiConfigMapper apiConfigMapper;
+    private final AiModelMapper aiModelMapper;
     private final ObjectProvider<ChatModelFactory> chatModelFactoryProvider;
     private final ProviderCatalogService providerCatalog;
 
     @CacheEvict(value = "episodeBgmConfig", allEntries = true)
     @Transactional
     public Long createApiConfig(ApiConfig apiConfig) {
+        apiConfig.setPlatform(normalizeCodexPlatform(apiConfig.getPlatform()));
         normalizeProviderBinding(apiConfig);
         applyPlatformDefaults(apiConfig);
         if (apiConfig.getAutoAppendV1Path() == null) {
@@ -43,6 +53,7 @@ public class ApiConfigService {
         return apiConfig.getId();
     }
 
+    /** 更新接入配置，停用前须解除启用模型的默认标记。 */
     @CacheEvict(value = "episodeBgmConfig", allEntries = true)
     @Transactional
     public void updateApiConfig(Long id, String name, String platform, String providerId,
@@ -57,12 +68,20 @@ public class ApiConfigService {
         if (config == null) {
             throw new BusinessException(404, "API配置不存在");
         }
-        String effectivePlatform = platform != null ? platform : config.getPlatform();
+        if (Integer.valueOf(1).equals(config.getStatus()) && status != null && !Integer.valueOf(1).equals(status)) {
+            requireNoEnabledDefaultModel(id);
+        }
+        String savedPlatform = normalizeCodexPlatform(config.getPlatform());
+        String effectivePlatform = platform != null ? normalizeCodexPlatform(platform) : savedPlatform;
+        if (!Objects.equals(effectivePlatform, savedPlatform)
+                && (CODEX.equals(effectivePlatform) || CODEX.equals(savedPlatform))) {
+            throw new BusinessException(400, "Codex 需要独立的本机接入配置，请新建配置后绑定模型");
+        }
         if (name != null) {
             config.setName(name);
         }
-        if (platform != null) {
-            config.setPlatform(platform);
+        if (platform != null || CODEX.equals(effectivePlatform)) {
+            config.setPlatform(effectivePlatform);
         }
         if (providerId != null) {
             config.setProviderId(providerId);
@@ -122,11 +141,23 @@ public class ApiConfigService {
         evictModelCaches();
     }
 
+    /** 删除接入前保留启用默认模型所依赖的配置。 */
     @CacheEvict(value = "episodeBgmConfig", allEntries = true)
     @Transactional
     public void deleteApiConfig(Long id) {
+        requireNoEnabledDefaultModel(id);
         apiConfigMapper.deleteById(id);
         evictModelCaches();
+    }
+
+    /** 防止停用或删除仍供默认模型使用的接入。 */
+    private void requireNoEnabledDefaultModel(Long apiConfigId) {
+        if (aiModelMapper.exists(new LambdaQueryWrapper<AiModel>()
+                .eq(AiModel::getApiConfigId, apiConfigId)
+                .eq(AiModel::getStatus, 1)
+                .eq(AiModel::getDefaultModel, true))) {
+            throw new BusinessException(409, "此 API 配置仍供默认模型使用，请先切换或取消默认模型");
+        }
     }
 
     public ApiConfig getById(Long id) {
@@ -151,6 +182,22 @@ public class ApiConfigService {
 
     public List<ApiConfig> getEnabledList() {
         return apiConfigMapper.selectList(new LambdaQueryWrapper<ApiConfig>().eq(ApiConfig::getStatus, 1));
+    }
+
+    /** 批量查询指定供应商的配置标识。 */
+    public Set<Long> getIdsByPlatform(String platform) {
+        return apiConfigMapper.selectList(new LambdaQueryWrapper<ApiConfig>()
+                        .select(ApiConfig::getId).eq(ApiConfig::getPlatform, platform)).stream()
+                .map(ApiConfig::getId)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    public boolean isLocalCodexAvailable() {
+        return providerCatalog.isLocalCodexAvailable();
+    }
+
+    public void requireLocalCodex() {
+        providerCatalog.requireLocalCodex();
     }
 
     /**
@@ -188,6 +235,10 @@ public class ApiConfigService {
             return null;
         }
         return protocol.trim().toLowerCase().replace(' ', '_').replace('-', '_');
+    }
+
+    private String normalizeCodexPlatform(String platform) {
+        return platform != null && CODEX.equalsIgnoreCase(platform.trim()) ? CODEX : platform;
     }
 
     private void normalizeProxyConfig(ApiConfig config) {
@@ -256,7 +307,20 @@ public class ApiConfigService {
     }
 
     private void applyPlatformDefaults(ApiConfig config) {
-        if (config == null || StrUtil.isBlank(config.getPlatform())) {
+        if (config == null) {
+            return;
+        }
+        if (CODEX.equals(normalizeProtocol(config.getImageProtocol()))
+                || CODEX.equals(normalizeProtocol(config.getVideoProtocol()))
+                || (CODEX.equals(normalizeProtocol(config.getTextProtocol())) && !CODEX.equals(config.getPlatform()))) {
+            throw new BusinessException(400, "Codex 协议只适用于使用本机 Codex 接入的文本模型");
+        }
+        if (StrUtil.isBlank(config.getPlatform())) {
+            return;
+        }
+        if (CODEX.equals(config.getPlatform())) {
+            validateCodexConfig(config);
+            config.setAutoAppendV1Path(false);
             return;
         }
         if (SoniloAudioClient.PLATFORM.equalsIgnoreCase(config.getPlatform())) {
@@ -283,6 +347,20 @@ public class ApiConfigService {
             throw new BusinessException(400, "ComfyUI 图片和视频默认协议必须为 comfyui");
         }
         config.setAutoAppendV1Path(false);
+    }
+
+    /** 本机登录接入的配置只登记文本协议，不持久化连接地址和鉴权信息。 */
+    private void validateCodexConfig(ApiConfig config) {
+        requireLocalCodex();
+        if (!CODEX.equals(normalizeProtocol(config.getTextProtocol()))
+                || StrUtil.isNotBlank(config.getImageProtocol()) || StrUtil.isNotBlank(config.getVideoProtocol())) {
+            throw new BusinessException(400, "Codex 接入只支持 Codex 文本协议");
+        }
+        if (StrUtil.isNotBlank(config.getApiUrl()) || StrUtil.isNotBlank(config.getApiKey())
+                || StrUtil.isNotBlank(config.getAppId()) || StrUtil.isNotBlank(config.getAppSecret())
+                || !AiProxySupport.TYPE_NONE.equals(AiProxySupport.normalizeProxyType(config.getProxyType()))) {
+            throw new BusinessException(400, "Codex 接入使用本机 ChatGPT 登录，无需填写地址、密钥或代理");
+        }
     }
 
     private void evictModelCaches() {

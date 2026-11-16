@@ -19,6 +19,8 @@ public interface AgentRunMapper extends BaseMapper<AgentRun> {
 
     boolean hasPendingCanvasNode(@Param("runId") String runId);
 
+    boolean hasActiveProjectScriptParse(@Param("projectId") long projectId);
+
     AgentRun selectByRunIdForUpdate(@Param("runId") String runId);
 
     AgentRun selectByRunId(@Param("runId") String runId);

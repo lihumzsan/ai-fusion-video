@@ -7,9 +7,15 @@ import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AgentConversation;
 import com.stonewu.fusion.entity.ai.AgentMessage;
 import com.stonewu.fusion.entity.ai.AgentRun;
+import com.stonewu.fusion.entity.project.Project;
+import com.stonewu.fusion.entity.script.Script;
+import com.stonewu.fusion.entity.system.User;
 import com.stonewu.fusion.mapper.ai.AgentConversationMapper;
 import com.stonewu.fusion.mapper.ai.AgentMessageMapper;
 import com.stonewu.fusion.mapper.ai.AgentRunMapper;
+import com.stonewu.fusion.mapper.project.ProjectMapper;
+import com.stonewu.fusion.mapper.script.ScriptMapper;
+import com.stonewu.fusion.mapper.system.UserMapper;
 import com.stonewu.fusion.service.ai.AgentConversationService;
 import com.stonewu.fusion.service.ai.run.AgentRunCoordinator;
 import com.stonewu.fusion.service.ai.run.AgentStateSessionIds;
@@ -22,21 +28,33 @@ import com.stonewu.fusion.service.ai.run.model.ChildRunIdentityConflictException
 import com.stonewu.fusion.service.ai.run.model.StartAgentRunCommand;
 import com.stonewu.fusion.service.ai.run.model.StartChildAgentRunCommand;
 import com.stonewu.fusion.service.ai.run.model.StartedAgentRun;
+import com.stonewu.fusion.service.canvas.model.CanvasActor;
+import com.stonewu.fusion.service.canvas.model.CanvasValueType;
+import com.stonewu.fusion.service.resource.ResourceCommandService;
+import com.stonewu.fusion.service.resource.model.ResourceCommandContext;
+import com.stonewu.fusion.service.resource.model.ResourcePatchCommand;
+import com.stonewu.fusion.service.resource.model.ScriptSourceCommand;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -54,17 +72,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AgentRunStartIT {
 
+    private static final int REDIS_PORT = 6379;
+
     @Container
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4.6")
             .withDatabaseName("ai_fusion_video")
             .withUsername("afv")
             .withPassword("afv-test");
 
+    @Container
+    private static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7.4.5-alpine")
+            .withExposedPorts(REDIS_PORT);
+
     @DynamicPropertySource
     static void configureDatabase(DynamicPropertyRegistry properties) {
         properties.add("spring.datasource.url", MYSQL::getJdbcUrl);
         properties.add("spring.datasource.username", MYSQL::getUsername);
         properties.add("spring.datasource.password", MYSQL::getPassword);
+        properties.add("spring.data.redis.host", REDIS::getHost);
+        properties.add("spring.data.redis.port", () -> REDIS.getMappedPort(REDIS_PORT));
+        properties.add("spring.data.redis.password", () -> "");
     }
 
     @Autowired
@@ -84,6 +111,18 @@ class AgentRunStartIT {
 
     @Autowired
     private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private UserMapper users;
+
+    @Autowired
+    private ProjectMapper projects;
+
+    @Autowired
+    private ScriptMapper scripts;
+
+    @Autowired
+    private ResourceCommandService resourceCommands;
 
     @Test
     void startsRootAndMessageAtomicallyAndRejectsInvalidRootAdmissions() {
@@ -173,6 +212,81 @@ class AgentRunStartIT {
         assertThat(run(command.runId())).isNull();
         assertConversationCounters(conversationId, 0, 1L);
         assertThat(messages(command.runId())).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"script_full_parse", "story_to_script"})
+    void projectScriptPipelineProtectsSourceAndExcludesOtherRuns(String agentType) {
+        var owner = User.builder().username(uniqueId("parse-user")).nickname("解析测试")
+                .password("unused-test-password").status(1).build();
+        assertThat(users.insert(owner)).isEqualTo(1);
+        var project = Project.builder().name("剧本解析受理测试").ownerType(1).ownerId(owner.getId()).build();
+        assertThat(projects.insert(project)).isEqualTo(1);
+        var script = Script.builder().projectId(project.getId()).title(project.getName())
+                .rawContent("当前剧本原文").version(3).build();
+        assertThat(scripts.insert(script)).isEqualTo(1);
+
+        var stale = scriptParseCommand(agentType, owner.getId(), project.getId(), script.getId(), 2);
+        assertThatThrownBy(() -> await(coordinator.start(stale)))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error).hasMessageContaining("项目剧本已变化");
+                });
+        assertThat(run(stale.runId())).isNull();
+
+        var first = scriptParseCommand(agentType, owner.getId(), project.getId(), script.getId(), 3);
+        var second = scriptParseCommand(agentType, owner.getId(), project.getId(), script.getId(), 3);
+        var responses = await(Mono.zip(coordinator.start(first).materialize(), coordinator.start(second).materialize()));
+        var results = List.of(responses.getT1(), responses.getT2());
+        assertThat(results).filteredOn(Signal::isOnNext).hasSize(1);
+        assertThat(results).filteredOn(Signal::isOnError).singleElement().satisfies(result -> {
+            assertThat(result.getThrowable()).isInstanceOfSatisfying(BusinessException.class, error -> {
+                assertThat(error.getCode()).isEqualTo(409);
+                assertThat(error).hasMessageContaining("项目已有剧本解析或改编任务正在运行");
+            });
+        });
+        var rejected = responses.getT1().isOnError() ? first : second;
+        assertThat(run(rejected.runId())).isNull();
+
+        String otherType = "story_to_script".equals(agentType) ? "script_full_parse" : "story_to_script";
+        var other = scriptParseCommand(otherType, owner.getId(), project.getId(), script.getId(), 3);
+        assertThatThrownBy(() -> await(coordinator.start(other)))
+                .isInstanceOfSatisfying(BusinessException.class, error -> assertThat(error.getCode()).isEqualTo(409));
+        assertThat(run(other.runId())).isNull();
+
+        var replacement = new ScriptSourceCommand(uniqueId("source"), script.getId(), 3, "替换剧本原文");
+        var context = ResourceCommandContext.user(new CanvasActor(owner.getId(), null), null);
+        assertThatThrownBy(() -> resourceCommands.execute(replacement, context))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error).hasMessageContaining("项目已有剧本解析或改编任务正在运行");
+                });
+        assertThat(scripts.selectById(script.getId())).satisfies(persisted -> {
+            assertThat(persisted.getVersion()).isEqualTo(3);
+            assertThat(persisted.getRawContent()).isEqualTo("当前剧本原文");
+        });
+
+        var accepted = responses.getT1().isOnNext() ? first : second;
+        markFailed(accepted.runId());
+        resourceCommands.execute(new ResourcePatchCommand(uniqueId("summary"), CanvasValueType.SCRIPT,
+                script.getId(), 3, JsonNodeFactory.instance.objectNode().put("summary", "正常解析摘要")), context);
+        var resume = scriptParseContinuation(accepted);
+        assertThat(await(coordinator.start(resume)).runId()).isEqualTo(resume.runId());
+        markFailed(resume.runId());
+
+        resourceCommands.execute(new ScriptSourceCommand(uniqueId("source"), script.getId(), 4, "新剧本原文"), context);
+        var staleResume = scriptParseContinuation(accepted);
+        assertThatThrownBy(() -> await(coordinator.start(staleResume)))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error).hasMessageContaining("剧本原文已变化");
+                });
+        assertThat(run(staleResume.runId())).isNull();
+    }
+
+    private void markFailed(String runId) {
+        runMapper.update(null, new LambdaUpdateWrapper<AgentRun>().eq(AgentRun::getRunId, runId)
+                .set(AgentRun::getStatus, "FAILED"));
     }
 
     @Test
@@ -433,12 +547,39 @@ class AgentRunStartIT {
     }
 
     private AgentKernelSnapshot snapshot(String stableKey, long modelVersion) {
+        return snapshot(stableKey, modelVersion, Map.of());
+    }
+
+    private StartAgentRunCommand scriptParseCommand(String agentType, long userId, long projectId, long scriptId,
+                                                   int version) {
+        String conversationId = uniqueId("parse-conversation");
+        conversationService.createOrUpdate(conversationId, userId, projectId, "project", projectId,
+                agentType, "剧本解析测试", "pipeline");
+        String runId = uniqueId("parse-run");
+        var snapshot = snapshot(agentType, 1L, Map.of("scriptId", String.valueOf(scriptId), "scriptVersion",
+                String.valueOf(version)));
+        return new StartAgentRunCommand(runId, conversationId, userId, projectId, agentType, null, null, null,
+                "session-" + runId, snapshot, "instance-a", Duration.ofSeconds(30), Instant.now().plusSeconds(300),
+                "解析剧本", null, null, null);
+    }
+
+    private StartAgentRunCommand scriptParseContinuation(StartAgentRunCommand first) {
+        String runId = uniqueId("parse-resume");
+        return new StartAgentRunCommand(runId, first.conversationId(), first.userId(), first.projectId(),
+                first.agentType(), null, null, null,
+                AgentStateSessionIds.recoveryGeneration(first.conversationId(), first.agentType(), runId),
+                first.kernelSnapshot(), first.ownerInstanceId(), first.ownerLease(), Instant.now().plusSeconds(300),
+                "继续", null, null, null);
+    }
+
+    private AgentKernelSnapshot snapshot(String stableKey, long modelVersion, Map<String, String> promptVariables) {
         AgentKernelSnapshotPayload payload = new AgentKernelSnapshotPayload(
                 AgentKernelSnapshotPayload.CURRENT_SCHEMA_VERSION,
                 stableKey,
                 stableKey + " name",
                 "test agent",
                 "You are a test agent.",
+                promptVariables,
                 10,
                 "model-config-1",
                 modelVersion,

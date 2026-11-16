@@ -4,6 +4,7 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/** 已保存的 ComfyUI 工作流版本及其动态输入类型。 */
 @Data
 public class ComfyUiWorkflowVersionRespVO {
 
@@ -15,6 +16,7 @@ public class ComfyUiWorkflowVersionRespVO {
     private String inputBindingsJson;
     private String outputBindingsJson;
     private String requiredNodesJson;
+    private boolean h3Ref;
     private String workflowHash;
     private Integer validationStatus;
     private String validationMessage;

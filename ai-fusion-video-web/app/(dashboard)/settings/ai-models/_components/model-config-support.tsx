@@ -153,6 +153,7 @@ export const MODEL_PROTOCOL_LABELS: Record<string, string> = {
   kling: "可灵协议",
   sora: "Sora 协议",
   comfyui: "ComfyUI Native API",
+  codex: "本机 Codex",
 };
 
 export const TEXT_PROTOCOL_OPTIONS = [

@@ -28,6 +28,7 @@ const tones: Record<CanvasNodeKind, CanvasTone> = {
   videoGeneration: "video",
   videoCompose: "video",
   audio: "audio",
+  voiceGeneration: "audio",
   musicGeneration: "audio",
   sfxGeneration: "audio",
   audioMix: "audio",

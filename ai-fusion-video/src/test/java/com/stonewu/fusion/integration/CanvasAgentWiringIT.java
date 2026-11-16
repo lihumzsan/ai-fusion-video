@@ -847,6 +847,20 @@ class CanvasAgentWiringIT {
         verify(providers, never()).provisionSingleRequestModel(any(AiModel.class));
     }
 
+    @Test
+    void storedEmptyModelConfigDoesNotBlockModelAdmission() throws Exception {
+        var f = fixture();
+        var model = model(f);
+        jdbc.update("UPDATE afv_ai_model SET config='' WHERE id=?", model.getId());
+        var persisted = modelService.getById(model.getId());
+
+        var claim = modelRequests.admit(UUID.randomUUID().toString(), persisted, runtime(f),
+                AgentKernelKey.modelRecordFingerprint(persisted)).orElseThrow();
+        modelRequests.completed(claim, null);
+
+        assertThat(modelRequestRows.selectById(claim.id()).getStatus()).isEqualTo("COMPLETED");
+    }
+
     @Test void explicitReasoningLevelIsPreservedWhenCheckingCurrentProviderConfiguration() throws Exception {
         var f = fixture();
         var model = model(f);

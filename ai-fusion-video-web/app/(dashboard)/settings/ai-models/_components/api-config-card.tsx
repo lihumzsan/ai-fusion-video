@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { toastApiError } from "@/lib/api/toast-api-error";
 import { getModelDisplayParts } from "@/lib/model-display";
 import { generationCapabilityError, resolvedGenerationConfig } from "@/lib/generation-capabilities";
-import { aiModelApi, PLATFORM_LABELS, type AiModel, type ApiConfig, type ModelPreset } from "@/lib/api/ai-model";
+import { aiModelApi, COMFYUI_VOICE_MODEL, MODEL_TYPE_LABELS, PLATFORM_LABELS, type AiModel, type ApiConfig, type ModelPreset } from "@/lib/api/ai-model";
 import { Button } from "@/components/ui/button";
 import { ModelVendorIcon, ProviderVendorIcon } from "@/components/dashboard/model-vendor-icon";
 import { maskSecret } from "../../_shared";
@@ -35,12 +35,14 @@ interface ApiConfigCardProps {
 
 export function ApiConfigCard({ config, provider, models, modelPresets, collapsed, testingModelIds, onToggle, onFetch, onWorkflow, onEditConfig, onDeleteConfig, onEditModel, onDeleteModel, onAddModel, onTestTextModel, onModelsChanged }: ApiConfigCardProps) {
   const shouldReduceMotion = useReducedMotion();
+    const localCodex = config.platform === "codex";
     const configModels = models.filter(m => m.apiConfigId === config.id);
 
     // 按类型分组
     const modelTypeGroups = [
       { type: 2, label: "图像生成" },
       { type: 3, label: "视频生成" },
+      { type: COMFYUI_VOICE_MODEL.type, label: MODEL_TYPE_LABELS[COMFYUI_VOICE_MODEL.type] },
       { type: 1, label: "对话" },
     ].map(g => ({
       ...g,
@@ -123,7 +125,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 mt-0.5">
-            {config.platform !== "comfyui" && config.platform !== "sonilo" && (
+            {config.platform !== "comfyui" && config.platform !== "sonilo" && !localCodex && (
               <Button variant="ghost" size="icon-sm"
                 type="button"
                 onClick={() => { onFetch() }}
@@ -183,7 +185,8 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
               </p>
             ) : (
               modelTypeGroups.map((group, gi) => {
-                const defaultModel = group.models.find(m => m.defaultModel);
+                const defaultModel = group.models.find(m => m.defaultModel && m.status === 1);
+                const voice = config.platform === "comfyui" && group.type === COMFYUI_VOICE_MODEL.type;
 
                 return (
                   <div key={group.type} className={cn(gi > 0 && "mt-2 pt-2 border-t border-border/30")}>
@@ -193,7 +196,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                         {group.label}
                       </span>
                       <div className="flex-1 h-px bg-border/15" />
-                      {defaultModel ? (
+                      {!voice && (defaultModel ? (
                         <span
                           className="inline-flex min-w-0 max-w-[55%] items-center gap-1 text-[10px] text-amber-500/80 font-medium shrink-0"
                           title={`默认: ${defaultModel.name}`}
@@ -203,7 +206,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                         </span>
                       ) : (
                         <span className="text-[10px] text-muted-foreground/30 shrink-0">未设默认</span>
-                      )}
+                      ))}
                     </div>
 
                     {/* 模型行 */}
@@ -219,7 +222,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                         || "自定义";
                       const providerDefaultProtocol = getApiConfigDefaultProtocol(config, model.modelType);
                       const effectiveModelProtocol = model.modelProtocol || providerDefaultProtocol;
-                      const protocolSource = model.modelProtocol
+                      const protocolSource = voice ? "内置" : model.modelProtocol
                         ? "模型覆盖"
                         : providerDefaultProtocol
                           ? "API 配置默认"
@@ -238,7 +241,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="text-sm font-medium break-words">{modelDisplay.name}</p>
-                              {model.defaultModel && (
+                              {!voice && model.defaultModel && model.status === 1 && (
                                 <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/10 text-[10px] text-amber-500 font-medium">
                                   <Star className="h-2.5 w-2.5" />
                                   默认
@@ -248,6 +251,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                                 "w-1.5 h-1.5 rounded-full shrink-0",
                                 model.status === 1 ? "bg-green-400" : "bg-muted-foreground/30"
                               )} />
+                              {model.status === 0 && <span className="text-xs text-muted-foreground">已停用</span>}
                             </div>
                             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5 flex-wrap">
                               {modelDisplay.code && (
@@ -262,11 +266,11 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                                     ? "bg-amber-500/10 text-amber-600"
                                     : "bg-muted/50 text-muted-foreground"
                                 )}
-                                title={model.capabilityPresetCode
+                                title={voice ? undefined : model.capabilityPresetCode
                                   ? `模型能力预设：${model.capabilityPresetCode}`
                                   : "模型能力由自定义高级设置提供"}
                               >
-                                能力：{capabilityPresetLabel}
+                                {voice ? "声音设计 · WAV" : `能力：${capabilityPresetLabel}`}
                               </span>
                               <span
                                 className={cn(
@@ -331,7 +335,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
 
                           {/* 操作按钮 */}
                           <div className="flex items-center gap-2 shrink-0 mt-0.5">
-                            {model.modelType === 1 && (
+                            {model.modelType === 1 && model.status === 1 && (
                               <Button variant="outline" size="xs"
                                 onClick={() => onTestTextModel(model)}
                                 disabled={testingModelIds.has(model.id)}
@@ -344,14 +348,10 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                                 {testingModelIds.has(model.id) ? "检测中" : "检测"}
                               </Button>
                             )}
-                            {!model.defaultModel && (
+                            {!voice && !model.defaultModel && model.status === 1 && config.status === 1 && (
                               <Button variant="outline" size="xs"
                                 onClick={async () => {
                                   try {
-                                    const sameTypeModels = models.filter(m => m.modelType === model.modelType && m.defaultModel);
-                                    for (const dm of sameTypeModels) {
-                                      await aiModelApi.update({ id: dm.id, defaultModel: false });
-                                    }
                                     await aiModelApi.update({ id: model.id, defaultModel: true });
                                     await onModelsChanged();
                                   } catch (err) {

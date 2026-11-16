@@ -5,6 +5,7 @@ import com.stonewu.fusion.controller.ai.vo.ApiConfigSaveReqVO;
 import com.stonewu.fusion.service.ai.ApiConfigService;
 import com.stonewu.fusion.service.generation.transport.GenerationProviderFailure;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -22,7 +23,7 @@ class ProviderDiscoveryFailureTests {
     void reportsReadContextAndSafeNetworkGuidance() throws Exception {
         var adapter = mock(ProviderModelDiscovery.class);
         when(adapter.type()).thenReturn("metaso");
-        var service = new ProviderDiscoveryService(new ProviderCatalogService(new ObjectMapper()),
+        var service = new ProviderDiscoveryService(new ProviderCatalogService(new ObjectMapper(), new MockEnvironment()),
                 mock(ApiConfigService.class), List.of(adapter));
         var request = new ApiConfigSaveReqVO();
         request.setName("fixture");

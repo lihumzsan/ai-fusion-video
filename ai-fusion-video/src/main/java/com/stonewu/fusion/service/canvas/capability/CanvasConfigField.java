@@ -12,7 +12,11 @@ public record CanvasConfigField(String type, boolean required, Double minimum,
     }
 
     public static CanvasConfigField text(int maxLength) {
-        return new CanvasConfigField("string", false, null, null, maxLength, List.of());
+        return text(maxLength, false);
+    }
+
+    public static CanvasConfigField text(int maxLength, boolean required) {
+        return new CanvasConfigField("string", required, null, null, maxLength, List.of());
     }
 
     public static CanvasConfigField integer(long min, long max, boolean required) {

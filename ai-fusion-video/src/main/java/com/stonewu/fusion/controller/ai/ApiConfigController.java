@@ -14,6 +14,8 @@ import com.stonewu.fusion.service.ai.ApiConfigService;
 import com.stonewu.fusion.service.ai.catalog.ProviderCatalogService;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowValidationService;
 import com.stonewu.fusion.service.ai.provider.AiProviderService;
+import com.stonewu.fusion.service.ai.provider.CodexStatusService;
+import com.stonewu.fusion.service.ai.provider.CodexStatusService.CodexStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -26,6 +28,7 @@ import java.util.List;
 
 import static com.stonewu.fusion.common.CommonResult.success;
 
+/** 管理 API 接入和供应商状态。 */
 @Tag(name = "API配置管理")
 @RestController
 @RequestMapping("/api/ai/api-config")
@@ -36,6 +39,7 @@ public class ApiConfigController {
     private final AiProviderService aiProviderService;
     private final ComfyUiWorkflowValidationService comfyUiWorkflowValidationService;
     private final ProviderCatalogService providerCatalogService;
+    private final CodexStatusService codexStatusService;
 
     @PostMapping("/create")
     @Operation(summary = "创建API配置")
@@ -105,6 +109,13 @@ public class ApiConfigController {
     @PreAuthorize("hasRole('ADMIN')")
     public CommonResult<List<ApiConfigRespVO>> list() {
         return success(ApiConfigConvert.INSTANCE.convertList(apiConfigService.getEnabledList()));
+    }
+
+    @GetMapping("/codex-status")
+    @Operation(summary = "查看本机 Codex 登录状态")
+    @PreAuthorize("hasRole('ADMIN')")
+    public CommonResult<CodexStatus> codexStatus() {
+        return success(codexStatusService.status());
     }
 
     @GetMapping("/remote-models")

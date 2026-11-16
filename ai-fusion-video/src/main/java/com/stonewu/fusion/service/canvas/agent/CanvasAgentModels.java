@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/** 向画布智能体提供可选模型和媒体服务的脱敏目录。 */
 @Component
 @RequiredArgsConstructor
 public class CanvasAgentModels {
@@ -33,11 +34,14 @@ public class CanvasAgentModels {
         String kind = input.path("kind").asText(null);
         var values = models.list().stream().filter(model -> kind == null || model.kind().equals(kind)).toList();
         var audio = models.audioServices();
+        var voice = models.voiceServices();
         return Map.of("status", "success", "page", page, "models",
                 values.stream().skip((long) page * 40).limit(40).map(this::summary).toList(),
                 "hasMore", (long) (page + 1) * 40 < values.size(), "total", values.size(),
                 "audioServices", audio.stream().skip((long) page * 40).limit(40).toList(), "hasMoreAudio",
-                (long) (page + 1) * 40 < audio.size());
+                (long) (page + 1) * 40 < audio.size(),
+                "voiceServices", voice.stream().skip((long) page * 40).limit(40).toList(), "hasMoreVoice",
+                (long) (page + 1) * 40 < voice.size());
     }
 
     private Object summary(CanvasModelCatalog.Option model) {

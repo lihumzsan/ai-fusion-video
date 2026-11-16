@@ -91,6 +91,12 @@
     "id": "comfyui", "platform": "comfyui", "label": "ComfyUI",
     "url": "http://localhost:8188", "textProtocol": "", "imageProtocol": "comfyui",
     "videoProtocol": "comfyui", "appendV1": false, "sponsored": false,
-    "supportedModelTypes": [2, 3], "discovery": "workflow", "modelPresetCodes": []
+    "supportedModelTypes": [2, 3, 4], "discovery": "workflow", "modelPresetCodes": []
+  },
+  {
+    "id": "codex", "platform": "codex", "label": "本机 Codex",
+    "url": "", "textProtocol": "codex", "imageProtocol": "", "videoProtocol": "",
+    "appendV1": false, "vendor": "openai", "hint": "支持对话和文本解析", "sponsored": false, "quickSetup": false,
+    "supportedModelTypes": [1], "discovery": "manual", "modelPresetCodes": []
   }
 ]

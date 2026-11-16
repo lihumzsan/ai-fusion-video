@@ -18,6 +18,12 @@
 ```bash
 pnpm install
 pnpm dev
+
+listener_pid=$(lsof -nP -t -iTCP:3000 -sTCP:LISTEN | head -n 1)
+parent_pid=$(ps -p "$listener_pid" -o ppid= | tr -d ' ')
+ps -p "$listener_pid,$parent_pid" -o pid,ppid,command
+
+corepack pnpm dev --hostname 127.0.0.1 --port 3000
 ```
 
 默认访问地址：<http://localhost:3000>

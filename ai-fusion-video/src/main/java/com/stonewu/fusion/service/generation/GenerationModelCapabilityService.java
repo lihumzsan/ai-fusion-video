@@ -9,6 +9,7 @@ import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.generation.ImageTask;
 import com.stonewu.fusion.entity.generation.VideoTask;
+import com.stonewu.fusion.service.media.MediaReference;
 import com.stonewu.fusion.service.ai.ModelPresetService;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowCapabilities;
 import com.stonewu.fusion.service.ai.model.AiModelMetadata;
@@ -218,11 +219,18 @@ public class GenerationModelCapabilityService {
             return;
         }
         JSONObject config = getMergedModelConfig(model);
+        boolean h3 = Boolean.TRUE.equals(config.getBool("h3Ref"));
+        if (h3 && task.getCount() != null && task.getCount() > 1) {
+            throw new BusinessException("H3 REF 每次生成只支持输出一个视频");
+        }
         VideoModelRules.normalizeTask(config, task);
         VideoModelCapability capability = videoCapability(config);
         List<String> referenceImages = parseJsonUrls(task.getReferenceImageUrls(), "referenceImageUrls");
         List<String> referenceVideos = parseJsonUrls(task.getReferenceVideoUrls(), "referenceVideoUrls");
         List<String> referenceAudios = parseJsonUrls(task.getReferenceAudioUrls(), "referenceAudioUrls");
+        if (h3 && !referenceAudios.stream().allMatch(MediaReference::managed)) {
+            throw new BusinessException("H3 REF 参考音频须先上传为托管媒体");
+        }
         boolean hasFirstFrame = StrUtil.isNotBlank(task.getFirstFrameImageUrl());
         boolean hasLastFrame = StrUtil.isNotBlank(task.getLastFrameImageUrl());
         int totalImageInputs = referenceImages.size() + (hasFirstFrame ? 1 : 0) + (hasLastFrame ? 1 : 0);
@@ -479,6 +487,7 @@ public class GenerationModelCapabilityService {
         }
         if (model != null) {
             mergeConfig(merged, parseConfig(model.getConfig()));
+            merged.remove("h3Ref");
             if (model.getComfyuiWorkflowId() != null) {
                 return comfyUiCapabilities.resolve(model, merged, workflowVersionId);
             }

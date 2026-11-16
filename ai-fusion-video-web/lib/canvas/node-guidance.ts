@@ -33,6 +33,7 @@ export const nodeGuidance: Record<CanvasNode["kind"], string> = {
   comfyui: "选择已发布的工作流，按其要求连接素材并设置参数。",
   frameExtract: "连接视频，提取首帧和尾帧，用于衔接后续镜头。",
   imageTransform: "连接图片并设置裁剪或尺寸，处理结果会另存为新图片。",
+  voiceGeneration: "描述想要的声音，填写试听台词，生成可连接至视频节点的参考音频。",
   musicGeneration: "选择音频服务并连接视频，为片段生成配乐。",
   sfxGeneration: "选择音频服务并连接视频，为画面生成音效。",
   audioMix: "连接视频与音轨，调整音量后生成带声音的视频。",

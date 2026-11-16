@@ -246,7 +246,7 @@ public final class AgentExecutionFactory {
     }
 
     /**
-     * Rehydrates only an exact, currently available no-tool kernel; other states fail closed.
+     * Restores a kernel only when its model configuration and tool contracts still match the snapshot.
      */
     public Mono<AgentKernelSpec> resolve(AgentKernelSnapshot snapshot) {
         AgentKernelSnapshot safeSnapshot = Objects.requireNonNull(

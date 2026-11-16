@@ -28,6 +28,7 @@ import {
   type ComfyUiWorkflowVersionSaveReq,
 } from "@/lib/api/comfyui-workflow";
 import { cn } from "@/lib/utils";
+import { isH3ReferenceWorkflow, markH3ReferenceWorkflow } from "@/lib/comfyui-test-request";
 import { ComfyUiBindingEditor } from "./comfyui-binding-editor";
 import { ComfyUiVersionActions } from "./comfyui-version-actions";
 import {
@@ -70,6 +71,14 @@ function versionToDraft(version: ComfyUiWorkflowVersion): VersionDraft {
   };
 }
 
+function updateApiWorkflow(draft: VersionDraft, apiWorkflowJson: string): VersionDraft {
+  return {
+    ...draft,
+    apiWorkflowJson,
+    inputBindings: isH3ReferenceWorkflow(apiWorkflowJson) ? {} : draft.inputBindings,
+  };
+}
+
 export function ComfyUiWorkflowEditor({
   workflow,
   apiConfig,
@@ -81,6 +90,7 @@ export function ComfyUiWorkflowEditor({
   const uiFileRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [importingH3, setImportingH3] = useState(false);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versions, setVersions] = useState<ComfyUiWorkflowVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<ComfyUiWorkflowVersion | null>(null);
@@ -208,7 +218,7 @@ export function ComfyUiWorkflowEditor({
     try {
       JSON.parse(value);
       setVersionDraft(previous => kind === "api"
-        ? { ...previous, apiWorkflowJson: value }
+        ? updateApiWorkflow(previous, value)
         : { ...previous, uiWorkflowJson: value });
       toast.success(kind === "api" ? "API-format JSON 已导入" : "UI-format JSON 已导入");
     } catch {
@@ -216,11 +226,43 @@ export function ComfyUiWorkflowEditor({
     }
   };
 
+  const importH3Preset = async () => {
+    setImportingH3(true);
+    try {
+      const apiWorkflowJson = await comfyUiWorkflowApi.h3RefPreset(apiConfig.id);
+      setVersionDraft(previous => {
+        if (previous !== versionDraft) {
+          return previous;
+        }
+        return {
+          ...updateApiWorkflow(previous, apiWorkflowJson),
+          outputBindings: [{ nodeId: "168", mediaType: "video", role: "primary" }],
+        };
+      });
+    } catch (error) {
+      toastApiError(error, "导入 H3 REF 工作流失败");
+    } finally {
+      setImportingH3(false);
+    }
+  };
+
+  const h3Ref = versionDraft.apiWorkflowJson === selectedVersion?.apiWorkflowJson
+    ? selectedVersion.h3Ref
+    : isH3ReferenceWorkflow(versionDraft.apiWorkflowJson);
   const versionLocked = Boolean(selectedVersion?.published && versionDraft.id === selectedVersion.id);
   const versionOptions = versions.map(version => ({
     value: String(version.id),
     label: `v${version.versionNo}${workflow?.activeVersionId === version.id ? " · 当前发布" : version.published ? " · 历史发布" : " · 草稿"}`,
   }));
+
+  const copyAsDraft = () => {
+    const draft = h3Ref
+      ? updateApiWorkflow(versionDraft, markH3ReferenceWorkflow(versionDraft.apiWorkflowJson))
+      : versionDraft;
+    setSelectedVersion(null);
+    setVersionDraft({ ...draft, id: undefined });
+    setStep(1);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -246,7 +288,7 @@ export function ComfyUiWorkflowEditor({
                   <SelectTrigger className="w-44 max-w-full text-xs"><SelectValue placeholder={versionsLoading ? "加载中" : versions.length === 0 ? "暂无版本" : "选择版本"} /></SelectTrigger>
                   <SelectContent className="text-xs"><SelectGroup>{versionOptions.map(option => <SelectItem key={option.value} value={option.value} className="text-xs">{option.label}</SelectItem>)}</SelectGroup></SelectContent>
                 </Select>
-                <Button variant="outline" onClick={() => { setSelectedVersion(null); setVersionDraft({ ...versionDraft, id: undefined }); setStep(1); }}>
+                <Button variant="outline" onClick={copyAsDraft}>
                   <Copy />{selectedVersion ? "复制为新版本" : "新建版本"}
                 </Button>
                 {selectedVersion && !selectedVersion.published && (
@@ -313,9 +355,28 @@ export function ComfyUiWorkflowEditor({
           <div className="space-y-4">
             {versionLocked && <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">已发布版本不可修改。点击“复制为新版本”后再编辑。</div>}
             <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3"><div><Label>API-format JSON</Label><p className="mt-1 text-xs text-muted-foreground">在 ComfyUI 中选择 Save (API Format) 或 Export (API)。</p></div><Button variant="outline" size="sm" onClick={() => apiFileRef.current?.click()} disabled={versionLocked}><FileJson2 />导入 API JSON</Button></div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <Label>API-format JSON</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">在 ComfyUI 中选择 Save (API Format) 或 Export (API)。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {metadata.modelType === 3 && !versionDraft.apiWorkflowJson.trim() && (
+                    <Button variant="outline" size="sm" onClick={importH3Preset} disabled={versionLocked || importingH3}>
+                      {importingH3 ? <Loader2 className="animate-spin" /> : <FileJson2 />}
+                      导入 H3 REF 工作流
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => apiFileRef.current?.click()} disabled={versionLocked || importingH3}>
+                    <FileJson2 />导入 API JSON
+                  </Button>
+                </div>
+              </div>
               <input ref={apiFileRef} type="file" accept="application/json,.json" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void importJson(file, "api"); event.target.value = ""; }} />
-              <Textarea value={versionDraft.apiWorkflowJson} onChange={event => setVersionDraft(previous => ({ ...previous, apiWorkflowJson: event.target.value }))} readOnly={versionLocked} spellCheck={false} className="min-h-72 resize-y font-mono text-xs" placeholder='{"1":{"class_type":"KSampler","inputs":{...}}}' />
+              <Textarea value={versionDraft.apiWorkflowJson} onChange={event => {
+                const apiWorkflowJson = event.target.value;
+                setVersionDraft(previous => updateApiWorkflow(previous, apiWorkflowJson));
+              }} readOnly={versionLocked} spellCheck={false} className="min-h-72 resize-y font-mono text-xs" placeholder='{"1":{"class_type":"KSampler","inputs":{...}}}' />
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3"><div><Label>UI-format JSON（可选）</Label><p className="mt-1 text-xs text-muted-foreground">仅用于留档和回到 ComfyUI 编辑，不参与执行。</p></div><Button variant="outline" size="sm" onClick={() => uiFileRef.current?.click()} disabled={versionLocked}><FileJson2 />导入 UI JSON</Button></div>
@@ -332,7 +393,10 @@ export function ComfyUiWorkflowEditor({
           </div>
         )}
 
-        {(step === 3 || step === 4) && workflow && (
+        {step === 3 && workflow && h3Ref && (
+          <p className="text-sm text-muted-foreground">H3 REF 自动接收提示词、1–9 张参考图和最多 3 段参考音频。</p>
+        )}
+        {((step === 3 && !h3Ref) || step === 4) && workflow && (
           <ComfyUiBindingEditor mode={step === 3 ? "input" : "output"} modelType={metadata.modelType} apiWorkflowJson={versionDraft.apiWorkflowJson} inputBindings={versionDraft.inputBindings} outputBindings={versionDraft.outputBindings} onInputBindingsChange={inputBindings => setVersionDraft(previous => ({ ...previous, inputBindings }))} onOutputBindingsChange={outputBindings => setVersionDraft(previous => ({ ...previous, outputBindings }))} />
         )}
 

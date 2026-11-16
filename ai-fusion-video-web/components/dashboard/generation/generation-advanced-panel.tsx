@@ -324,6 +324,7 @@ export function GenerationAdvancedPanel({
                     values={form.referenceAudios}
                     maxCount={parseLimit(capabilities.maxReferenceAudios, 3)}
                     mediaType="audio"
+                    h3ReferenceAudio={capabilities.h3Ref}
                     onChange={(referenceAudios) =>
                       onFormChange({ referenceAudios })
                     }

@@ -216,7 +216,9 @@ public class CanvasTemplateExport {
             case IMAGE_MODEL -> "图片模型";
             case VIDEO_MODEL -> "视频模型";
             case COMFYUI_MODEL -> "工作流模型";
+            case VOICE_MODEL -> "音色模型";
             case AUDIO_API -> "配乐服务";
+            case VOICE_API -> "ComfyUI 音色服务";
             case WORKFLOW -> "工作流版本";
             case MCP -> "MCP 操作";
         };

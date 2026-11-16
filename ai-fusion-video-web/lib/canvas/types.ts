@@ -27,6 +27,7 @@ export type CanvasNodeKind =
   | "comfyui"
   | "frameExtract"
   | "imageTransform"
+  | "voiceGeneration"
   | "musicGeneration"
   | "sfxGeneration"
   | "audioMix"
@@ -145,6 +146,7 @@ export interface CanvasCatalog {
   nodes: CanvasCapability[];
   models: CanvasModelOption[];
   audioServices: { id: number; name: string }[];
+  voiceServices: { id: number; name: string }[];
   writebackFields: CanvasWritebackField[];
   agentProfiles: CanvasAgentProfile[];
   skills: AgentSkillOption[];

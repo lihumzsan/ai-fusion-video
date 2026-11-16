@@ -64,7 +64,11 @@ export function CanvasModelFields({
   );
   const selectedModel = catalog.models.find((item) => item.id === config.modelId);
   const model = selectedModel ? modelForVersion(selectedModel, config.workflowVersionId) : undefined;
-  const modelLabel = canvasAgentKinds.includes(capability.kind) ? "思考模型" : "模型";
+  const voice = capability.kind === "voiceGeneration";
+  const existingVoiceService = voice && config.modelId === undefined
+    ? catalog.voiceServices.find((service) => service.id === config.apiConfigId)
+    : undefined;
+  const modelLabel = voice ? "音频生成模型" : canvasAgentKinds.includes(capability.kind) ? "思考模型" : "模型";
   const inputs = model ? modelInputs(model, config) : undefined;
   const refresh = async () => {
     setRefreshing(true);
@@ -81,7 +85,7 @@ export function CanvasModelFields({
     <section className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium">
-          {modelLabel}{modelKind(capability.kind) || canvasAgentKinds.includes(capability.kind) ? " *" : ""}
+          {modelLabel}{!existingVoiceService && (modelKind(capability.kind) || canvasAgentKinds.includes(capability.kind)) ? " *" : ""}
         </span>
         <Button
           variant="ghost"
@@ -109,6 +113,9 @@ export function CanvasModelFields({
         onChange={(value) => {
           const next: CanvasConfig = { ...config, modelId: Number(value) };
           delete next.workflowVersionId;
+          if (voice) {
+            delete next.apiConfigId;
+          }
           if (capability.kind === "comfyui")
             next.resultType = options.find(
               (item) => item.id === Number(value),
@@ -116,12 +123,15 @@ export function CanvasModelFields({
           onChange(next);
         }}
       />
+      {existingVoiceService && (
+        <p className="text-xs text-muted-foreground">当前沿用 ComfyUI 服务 {existingVoiceService.name}。</p>
+      )}
       {model && !matchesInputs(model) && (
         <p role="alert" className="text-xs text-destructive">
           当前模型不支持这些输入。可以继续编辑，运行前请调整连接或更换模型。
         </p>
       )}
-      {!options.length && (
+      {!options.length && !existingVoiceService && (
         <CanvasGuidance title="先添加一个可用模型" tone="warning">
           在系统设置中添加并启用对应模型，然后刷新列表。没有配置权限时，请联系项目管理员。
           <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}><RefreshCw />刷新模型</Button>
@@ -170,7 +180,7 @@ export function CanvasModelFields({
           {model?.parameters.exclusiveInputModes === true && (
             <p>首尾帧与多模态参考需选择一种方式。</p>
           )}
-          {model?.parameters.audioRequiresVisualInput === true && (
+          {model?.parameters.referenceAudioRequiresVisualInput === true && (
             <p>参考音频需要同时提供图片或视频。</p>
           )}
           </div>

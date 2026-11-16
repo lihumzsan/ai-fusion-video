@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.service.canvas.CanvasJson;
+import com.stonewu.fusion.service.canvas.capability.CanvasModelCatalog;
 import com.stonewu.fusion.service.canvas.model.CanvasActor;
 import com.stonewu.fusion.service.canvas.run.CanvasRunData.NodeRun;
 import com.stonewu.fusion.service.canvas.run.CanvasRunData.Ports;
@@ -38,6 +39,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class CanvasMediaJobs {
+    static final String VOICE_CANCEL_ACKNOWLEDGED = "voiceCancelAcknowledged";
+
     private final CanvasMediaJobMapper canvasJobs;
     private final MediaJobMapper mediaJobs;
     private final ExecutionCoordinationMapper coordination;
@@ -46,6 +49,7 @@ public class CanvasMediaJobs {
     private final MediaJobFence fence;
     private final GenerationOutbox outbox;
     private final GenerationModelSnapshot apis;
+    private final CanvasModelCatalog models;
     private final MediaAccessPolicy access;
     private final CanvasRunSources sources;
 
@@ -94,11 +98,13 @@ public class CanvasMediaJobs {
         return jobs.get(claim.id());
     }
 
+    /** 权限失效后仍允许持有租约的工作者记录原远端任务取消回执。 */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     @CacheEvict(value = "canvasMediaJob", key = "#claim.id()")
-    public void checkpoint(MediaJob.Claim claim, ObjectNode checkpoint, String phase, boolean allowCancel) {
-        var job = check(claim, allowCancel);
-        mediaJobs.checkpoint(json.write(checkpoint), phase, job.id());
+    public void recordVoiceCancellation(MediaJob.Claim claim) {
+        var job = jobs.observe(claim);
+        var checkpoint = job.checkpoint().deepCopy().put(VOICE_CANCEL_ACKNOWLEDGED, true);
+        mediaJobs.checkpoint(json.write(checkpoint), "已请求 ComfyUI 取消", job.id());
         event(jobs.get(job.id()), "CANVAS_MEDIA_CHANGED", Map.of());
     }
 
@@ -112,12 +118,21 @@ public class CanvasMediaJobs {
         event(jobs.get(job.id()), "CANVAS_MEDIA_CHANGED", Map.of());
     }
 
+    /** 提交前重查已固定的模型和连接。已受理任务仍通过原连接查询。 */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     @CacheEvict(value = "canvasMediaJob", key = "#claim.id()")
     public MediaJobRepository.Submission beginAudio(MediaJob.Claim claim) {
-        var job = check(claim, false);
-        api(input(job));
-        canvasJobs.update(Wrappers.<CanvasMediaJobEntity>lambdaUpdate().eq(CanvasMediaJobEntity::getJobId, job.id())
+        var input = input(check(claim, false));
+        var api = api(input);
+        var environment = input.environment();
+        if (environment.has("modelHash")) {
+            var selection = models.requireVoiceModel(environment.path("modelId").asLong());
+            if (!selection.api().getId().equals(api.getId())
+                    || !models.voiceModelFingerprint(selection.model()).equals(environment.path("modelHash").asText())) {
+                throw CanvasRunException.conflict("音频生成模型配置已变化，请重新确认运行计划");
+            }
+        }
+        canvasJobs.update(Wrappers.<CanvasMediaJobEntity>lambdaUpdate().eq(CanvasMediaJobEntity::getJobId, claim.id())
                 .set(CanvasMediaJobEntity::getPermitHeld, true));
         return jobs.prepareSubmission(claim, "audio");
     }

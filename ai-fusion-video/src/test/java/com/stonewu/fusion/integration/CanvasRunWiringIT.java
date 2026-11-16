@@ -2,6 +2,7 @@ package com.stonewu.fusion.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.security.TokenService;
 import com.stonewu.fusion.service.ai.run.AgentExecutionLimits;
 import com.stonewu.fusion.service.canvas.run.CanvasRunData.Claim;
@@ -21,6 +22,7 @@ import com.stonewu.fusion.service.resource.ResourceQueryService;
 import com.stonewu.fusion.service.resource.model.ResourceCreateCommand;
 import com.stonewu.fusion.service.resource.model.ResourcePatchCommand;
 import com.stonewu.fusion.service.resource.model.ResourceCommandContext;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -48,7 +50,10 @@ import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import javax.imageio.ImageIO;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioSystem;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -1033,6 +1038,146 @@ class CanvasRunWiringIT {
         assertThat(done.at("/statistics/media/audios").asInt()).isZero();
     }
 
+    @ParameterizedTest(name = "未标记的已发布版本 = {0}")
+    @ValueSource(booleans = {false, true})
+    void designedVoiceIsStoredAsPcmWavAndFedToH3(boolean legacyPublishedVersion) throws Exception {
+        var f = fixture();
+        Path directory = FILES.resolve("voice-h3-" + f.id);
+        byte[] flac = voiceFlac(directory);
+        byte[] video = CanvasAgentMediaFixtures.video(directory, 5);
+        var prompts = new ConcurrentHashMap<String, JsonNode>();
+        var audioUpload = new AtomicReference<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/object_info/FB_Qwen3TTSVoiceDesign", exchange -> respond(exchange, "application/json", """
+                {"FB_Qwen3TTSVoiceDesign":{"output":["AUDIO"],"input":{"required":{
+                  "text":["STRING",{}],"instruct":["STRING",{}],"model_choice":[["1.7B"],{}],
+                  "device":[["cuda"],{}],"precision":[["bf16"],{}],"language":[["Chinese"],{}]},
+                  "optional":{"attention":[["sdpa"],{}]}}}}
+                """.getBytes(StandardCharsets.UTF_8)));
+        server.createContext("/object_info/SaveAudio", exchange -> respond(exchange, "application/json", """
+                {"SaveAudio":{"output_node":true,"input":{"required":{"audio":["AUDIO",{}],
+                  "filename_prefix":["STRING",{}]}}}}
+                """.getBytes(StandardCharsets.UTF_8)));
+        server.createContext("/prompt", exchange -> {
+            var body = JSON.readTree(exchange.getRequestBody());
+            String promptId = body.path("prompt_id").asText();
+            prompts.put(promptId, body.path("prompt"));
+            respond(exchange, "application/json", JSON.writeValueAsBytes(Map.of(
+                    "prompt_id", promptId, "number", 0, "node_errors", Map.of())));
+        });
+        server.createContext("/api/jobs/", exchange -> {
+            String promptId = exchange.getRequestURI().getPath().substring("/api/jobs/".length());
+            var prompt = prompts.get(promptId);
+            if (prompt == null) {
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
+            boolean voice = "SaveAudio".equals(prompt.at("/2/class_type").asText());
+            var descriptor = Map.of("filename", voice ? "sample.flac" : "sample.mp4", "subfolder", "test", "type", "output");
+            var outputs = Map.of(voice ? "2" : "168", Map.of(voice ? "audio" : "gifs", List.of(descriptor)));
+            respond(exchange, "application/json", JSON.writeValueAsBytes(Map.of(
+                    "id", promptId, "status", "completed", "outputs", outputs)));
+        });
+        server.createContext("/view", exchange -> {
+            boolean voice = exchange.getRequestURI().getQuery().contains("filename=sample.flac");
+            respond(exchange, voice ? "audio/flac" : "video/mp4", voice ? flac : video);
+        });
+        server.createContext("/upload/image", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.ISO_8859_1);
+            boolean audio = body.contains("Content-Type: audio/wav");
+            if (audio) {
+                audioUpload.set(body);
+            }
+            respond(exchange, "application/json", JSON.writeValueAsBytes(Map.of(
+                    "name", audio ? "reference.wav" : "reference.png", "subfolder", "test", "type", "input")));
+        });
+        server.start();
+        try (var workflowStream = getClass().getResourceAsStream("/comfyui/h3-reference-t8-dual-stage-2mp.json")) {
+            assertThat(workflowStream).isNotNull();
+            var graph = JSON.readTree(workflowStream);
+            if (legacyPublishedVersion) {
+                ((ObjectNode) graph.path("168").path("_meta")).remove("aiFusionVideoProfile");
+            }
+            String workflow = graph.toString();
+            jdbc.update("INSERT INTO afv_api_config(id,name,platform,video_protocol,api_url) VALUES(?,'测试 ComfyUI','comfyui','comfyui',?)",
+                    f.id, "http://127.0.0.1:" + server.getAddress().getPort());
+            jdbc.update("INSERT INTO afv_comfyui_workflow(id,api_config_id,name,code,model_type,active_version_id) VALUES(?,?,'测试 H3','h3-test',3,?)",
+                    f.id, f.id, f.id);
+            jdbc.update("""
+                    INSERT INTO afv_comfyui_workflow_version(id,workflow_id,version_no,api_workflow_json,input_bindings_json,
+                        output_bindings_json,required_nodes_json,workflow_hash,validation_status,test_status,published)
+                    VALUES(?,?,1,?,'{}','[{"nodeId":"168","mediaType":"video","role":"primary"}]','[]',SHA2(?,256),1,1,1)
+                    """, f.id, f.id, workflow, workflow);
+            jdbc.update("""
+                    INSERT INTO afv_ai_model(id,name,code,model_type,model_protocol,api_config_id,comfyui_workflow_id,config,max_concurrency,
+                        multimodal_input_types,multimodal_input_transports,reasoning_effort_levels)
+                    VALUES(?,'测试 H3 模型','h3-ref-test',3,'comfyui',?,?,JSON_OBJECT(),1,JSON_ARRAY(),JSON_OBJECT(),JSON_ARRAY())
+                    """, f.id, f.id, f.id);
+            long voiceModel = f.id + 100_000L;
+            jdbc.update("""
+                    INSERT INTO afv_ai_model(id,name,code,model_type,model_protocol,api_config_id,max_concurrency,
+                        multimodal_input_types,multimodal_input_transports,reasoning_effort_levels)
+                    VALUES(?,'Qwen3-TTS VoiceDesign 1.7B','qwen3-tts-voice-design-1.7b',4,'comfyui',?,1,
+                        JSON_ARRAY(),JSON_OBJECT(),JSON_ARRAY())
+                    """, voiceModel, f.id);
+            String voice = id(), image = id(), settings = id(), h3 = id();
+            String description = "中年女性，声音低沉而平静";
+            String dialogue = "灯塔已经亮起来了，我们现在就出发吧。";
+            String videoPrompt = "角色抬头看向灯塔";
+            String setting = "薄雾从礁石间翻涌而来";
+            create(f, List.of(node(voice, "voiceGeneration", Map.of("modelId", voiceModel, "voiceDescription", description,
+                            "previewText", dialogue, "language", "Chinese")),
+                    node(image, "image", Map.of("resourceId", upload(f, PNG, "reference.png", "image/png"))),
+                    node(settings, "text", Map.of("content", setting)),
+                    node(h3, "comfyui", Map.of("modelId", f.id, "workflowVersionId", f.id, "resultType", "video",
+                            "prompt", videoPrompt, "ratio", "16:9"))),
+                    List.of(edge(voice, "audio", h3, "referenceAudios", 0),
+                            edge(image, "media", h3, "referenceImages", 0), edge(settings, "text", h3, "context", 0)));
+            var plan = plan(f, "ALL", List.of(), Map.of());
+            assertThat(plan.path("issues")).as(plan.toString()).isEmpty();
+            assertThat(plan.at("/cost/videoSeconds").asInt()).isEqualTo(5);
+            var done = awaitState(f, start(f, plan), "SUCCEEDED");
+            var audio = nodeResult(done, voice).at("/outputs/values/audio/0");
+            String mediaId = audio.path("mediaId").asText();
+            assertThat(mediaId).isNotBlank();
+            assertThat(audio.at("/data/state").asText()).isEqualTo("READY");
+            assertThat(audio.at("/data/content/mimeType").asText()).isEqualTo("audio/wav");
+            assertThat(audio.at("/data/content/durationMs").asLong()).isEqualTo(3000L);
+            var ticket = mediaTickets.browser(mediaId, new CanvasActor(f.id, null), false);
+            var download = http.exchange(ticket.url(), HttpMethod.GET, new HttpEntity<>(f.headers), byte[].class);
+            assertThat(download.getStatusCode()).isEqualTo(HttpStatus.OK);
+            byte[] wav = download.getBody();
+            assertThat(wav).isNotEmpty();
+            try (var pcm = AudioSystem.getAudioInputStream(new ByteArrayInputStream(wav))) {
+                var format = pcm.getFormat();
+                assertThat(format.getEncoding()).isEqualTo(AudioFormat.Encoding.PCM_SIGNED);
+                assertThat(format.getSampleSizeInBits()).isEqualTo(16);
+                assertThat(format.getSampleRate()).isEqualTo(48000f);
+                assertThat(format.getChannels()).isEqualTo(1);
+                assertThat(pcm.getFrameLength()).isEqualTo(144000L);
+            }
+            assertThat(audioUpload.get()).contains(new String(wav, StandardCharsets.ISO_8859_1));
+            assertThat(prompts.values()).hasSize(2);
+            var design = prompts.values().stream().filter(prompt -> "SaveAudio".equals(prompt.at("/2/class_type").asText()))
+                    .findFirst().orElseThrow();
+            assertThat(design.at("/1/class_type").asText()).isEqualTo("FB_Qwen3TTSVoiceDesign");
+            assertThat(design.at("/1/inputs/instruct").asText()).isEqualTo(description);
+            assertThat(design.at("/1/inputs/text").asText()).isEqualTo(dialogue);
+            assertThat(design.at("/1/inputs/language").asText()).isEqualTo("Chinese");
+            var reference = prompts.values().stream().filter(prompt -> prompt.has("168")).findFirst().orElseThrow();
+            assertThat(reference.at("/28/inputs/prompt").asText()).contains(videoPrompt, setting);
+            assertThat(reference.at("/18/inputs/audio").asText()).isEqualTo("test/reference.wav");
+            for (String conditioner : List.of("7", "14")) {
+                assertThat(reference.at("/" + conditioner + "/inputs/ref_audios.ref_audio_0"))
+                        .isEqualTo(JSON.createArrayNode().add("18").add(0));
+            }
+            assertThat(nodeResult(done, h3).at("/outputs/values/results/0/mediaId").asText()).isNotBlank();
+        } finally {
+            server.stop(0);
+        }
+    }
+
     @Test void audioCancellationKeepsCapacityUntilTheOriginalRemoteTaskActuallyFinishes() throws Exception {
         var f = fixture();
         var scenario = new AudioScenario(false);
@@ -1511,6 +1656,27 @@ class CanvasRunWiringIT {
                 .put("data".getBytes(StandardCharsets.US_ASCII)).putInt(length);
         for (int i = 0; i < length / 2; i++) buffer.putShort((short) (Math.sin(i * 440 * 2 * Math.PI / 48000) * 2000));
         return buffer.array();
+    }
+    private static byte[] voiceFlac(Path directory) throws IOException, InterruptedException {
+        Files.createDirectories(directory);
+        Path input = Files.write(directory.resolve("source.wav"), wav());
+        Path output = directory.resolve("sample.flac");
+        Path log = directory.resolve("flac.log");
+        var process = new ProcessBuilder("ffmpeg", "-v", "error", "-nostdin", "-i", input.toString(),
+                "-c:a", "flac", output.toString()).redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        if (!process.waitFor(15, TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            throw new IOException("Fixture FLAC encoding timed out");
+        }
+        assertThat(process.exitValue()).as(Files.readString(log)).isZero();
+        return Files.readAllBytes(output);
+    }
+    private static void respond(HttpExchange exchange, String contentType, byte[] content) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", contentType);
+        exchange.sendResponseHeaders(200, content.length);
+        try (var output = exchange.getResponseBody()) {
+            output.write(content);
+        }
     }
     private static final class AudioScenario {
         final AtomicInteger posts = new AtomicInteger();

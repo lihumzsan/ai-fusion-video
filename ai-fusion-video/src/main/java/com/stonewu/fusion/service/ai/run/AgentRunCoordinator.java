@@ -10,6 +10,7 @@ import com.stonewu.fusion.service.ai.agentscope.runtime.AgentRuntimeSchedulers;
 import com.stonewu.fusion.service.ai.agentscope.state.AgentStateCleanupPolicyService;
 import com.stonewu.fusion.service.ai.run.kernel.AgentKernelSnapshot;
 import com.stonewu.fusion.service.ai.run.model.*;
+import com.stonewu.fusion.service.resource.ProjectScriptParseGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -41,11 +42,12 @@ public class AgentRunCoordinator {
     private final AgentRuntimeSchedulers schedulers;
     private final AgentStateCleanupPolicyService stateCleanupPolicy;
     private final List<AgentChildAdmissionPolicy> childPolicies;
+    private final ProjectScriptParseGuard scriptParseGuard;
 
     public Mono<StartedAgentRun> start(StartAgentRunCommand command) {
         Objects.requireNonNull(command, "command must not be null");
         return Mono.fromCallable(() -> requireTransactionResult(
-                        transactionTemplate.execute(ignored -> startTransaction(command))))
+                        transactionTemplate.execute(ignored -> startTransaction(command, true))))
                 .subscribeOn(schedulers.journal());
     }
 
@@ -57,7 +59,7 @@ public class AgentRunCoordinator {
         if (command.canvasScopeJson() == null) {
             throw new IllegalArgumentException("专业画布节点缺少作用域");
         }
-        return startTransaction(command);
+        return startTransaction(command, false);
     }
 
     public Mono<ChildRunAdmission> startChild(StartChildAgentRunCommand command) {
@@ -67,8 +69,9 @@ public class AgentRunCoordinator {
                 .subscribeOn(schedulers.journal());
     }
 
-    private StartedAgentRun startTransaction(StartAgentRunCommand command) {
+    private StartedAgentRun startTransaction(StartAgentRunCommand command, boolean verifySelectedScript) {
         requireRootIdentity(command);
+        scriptParseGuard.admit(command, verifySelectedScript);
         AgentConversation conversation = requireOwnedConversation(
                 command.conversationId(), command.userId(), command.projectId());
         LocalDateTime databaseNow = runRepository.databaseNow();

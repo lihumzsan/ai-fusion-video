@@ -45,6 +45,7 @@ import { comfyUiWorkflowApi } from "@/lib/api/comfyui-workflow";
 import type { ProviderDefinition } from "@/lib/api/provider-catalog";
 import { ProviderPresetPicker } from "./provider-preset-picker";
 import { ApiProxySettings } from "./api-proxy-settings";
+import { CodexLoginStatus } from "./codex-login-status";
 
 export interface ApiConfigDialogProps {
   open: boolean;
@@ -87,6 +88,15 @@ export function ApiConfigDialog({
   const [form, setForm] = useState<ApiConfigSaveReq>({ name: "" });
   const selectedProvider = providers.find(
     (provider) => provider.id === form.providerId,
+  );
+  const editableProviders = editingConfig
+    ? providers.filter((provider) => provider.id !== "codex")
+    : providers;
+  const codexProvider = editableProviders.find((provider) => provider.id === "codex");
+  const editingCodex = editingConfig?.platform === "codex";
+  const localCodex = form.platform === "codex";
+  const platformOptions = PLATFORM_OPTIONS.filter(
+    (option) => option.value !== "codex" || codexProvider || editingCodex,
   );
   const editingRequiresKey =
     providers.find((provider) => provider.id === editingConfig?.providerId)
@@ -267,6 +277,16 @@ export function ApiConfigDialog({
             imageProtocol: provider.imageProtocol,
             videoProtocol: provider.videoProtocol,
             autoAppendV1Path: provider.appendV1,
+            ...(provider.platform === "codex" ? {
+              apiKey: "",
+              appId: "",
+              appSecret: "",
+              proxyType: "none",
+              proxyHost: "",
+              proxyPort: undefined,
+              proxyUsername: "",
+              proxyPassword: "",
+            } : {}),
           };
     setNoKey(false);
     setIssue(null);
@@ -308,7 +328,9 @@ export function ApiConfigDialog({
             {editingConfig ? "编辑 API 配置" : "新建 API 配置"}
           </DialogTitle>
           <DialogDescription>
-            选择提供商，填写地址与密钥。创建后添加模型，即可在助手和画布中使用。
+            {localCodex
+              ? "关联本机 Codex 登录，用于对话和文本解析。"
+              : "选择提供商并填写连接信息。创建后可添加模型。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -323,7 +345,7 @@ export function ApiConfigDialog({
                 配置名称
               </Label>
               <Input
-                placeholder="例如：DeepSeek / Gemini"
+                placeholder={localCodex ? "例如：本机 Codex" : "例如：DeepSeek / Gemini"}
                 id="api-config-name"
                 aria-invalid={issue?.field === "api-config-name"}
                 value={form.name}
@@ -339,11 +361,22 @@ export function ApiConfigDialog({
               </Label>
               <Select
                 value={form.platform || "openai_compatible"}
+                disabled={editingCodex}
                 onValueChange={(v) => {
                   const platform = String(v);
+                  if (platform === "codex" && codexProvider) {
+                    selectProvider(codexProvider);
+                    return;
+                  }
                   setNoKey(false);
                   updateField("platform", platform);
                   updateField("providerId", "");
+                  if (localCodex) {
+                    setForm((previous) => ({
+                      ...previous,
+                      textProtocol: platform === "openai_compatible" ? "openai_compatible" : "",
+                    }));
+                  }
                   if (v === "openai_compatible") {
                     updateField("autoAppendV1Path", true);
                   }
@@ -370,7 +403,7 @@ export function ApiConfigDialog({
                     }));
                   }
                 }}
-                items={PLATFORM_OPTIONS.map((o) => ({
+                items={platformOptions.map((o) => ({
                   value: o.value,
                   label: o.label,
                 }))}
@@ -383,7 +416,7 @@ export function ApiConfigDialog({
                 </SelectTrigger>
                 <SelectContent className="text-sm">
                   <SelectGroup>
-                    {PLATFORM_OPTIONS.map((opt) => (
+                    {platformOptions.map((opt) => (
                       <SelectItem
                         key={opt.value}
                         value={opt.value}
@@ -404,13 +437,17 @@ export function ApiConfigDialog({
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <p className="text-[10px] leading-4 text-muted-foreground">
-                决定认证字段、地址规则和远程模型发现方式；具体接口格式由下方各能力协议决定。
-              </p>
+              {!localCodex && (
+                <p className="text-[10px] leading-4 text-muted-foreground">
+                  决定认证字段、地址规则和远程模型发现方式；具体接口格式由下方各能力协议决定。
+                </p>
+              )}
             </div>
 
-            <ProviderPresetPicker
-              providers={providers}
+            {localCodex && <CodexLoginStatus />}
+
+            {!localCodex && <ProviderPresetPicker
+              providers={editableProviders}
               selectedId={form.providerId}
               loading={providersLoading}
               error={providersError}
@@ -418,7 +455,7 @@ export function ApiConfigDialog({
               allowQuickSetup={!editingConfig}
               onReload={onReloadProviders}
               onSelect={selectProvider}
-            />
+            />}
 
             {form.videoProtocol === "dashscope_wan3" && (
               <p className="text-xs leading-relaxed text-muted-foreground">
@@ -571,7 +608,7 @@ export function ApiConfigDialog({
               </div>
             </div>
 
-            <details className="rounded-lg border border-border/20 bg-background/70 p-3">
+            {!localCodex && <details className="rounded-lg border border-border/20 bg-background/70 p-3">
               <summary className="cursor-pointer rounded-lg text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 高级协议设置
               </summary>
@@ -660,7 +697,7 @@ export function ApiConfigDialog({
                     })}
                 </div>
               </div>
-            </details>
+            </details>}
 
             {form.platform === "openai_compatible" && (
               <div className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5">
@@ -705,14 +742,14 @@ export function ApiConfigDialog({
               </div>
             )}
 
-            <ApiProxySettings
+            {!localCodex && <ApiProxySettings
               form={form}
               issue={issue}
               detailsRef={proxyDetails}
               updateField={updateField}
               showSecrets={showSecrets}
               setShowSecrets={setShowSecrets}
-            />
+            />}
 
             {/* 备注 */}
             <div className="flex min-w-0 flex-col gap-2">

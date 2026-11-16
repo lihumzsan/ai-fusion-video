@@ -62,13 +62,15 @@ public class CanvasTemplateProviders {
         return switch (use.field()) {
             case "imageModelId" -> ProviderKind.IMAGE_MODEL;
             case "videoModelId" -> ProviderKind.VIDEO_MODEL;
-            case "apiConfigId" -> ProviderKind.AUDIO_API;
+            case "apiConfigId" -> kind == CanvasNodeKind.VOICE_GENERATION ? ProviderKind.VOICE_API
+                    : ProviderKind.AUDIO_API;
             case "workflowVersionId" -> ProviderKind.WORKFLOW;
             case "contractId" -> ProviderKind.MCP;
             case "modelId" -> switch (kind) {
                 case IMAGE_GENERATION -> ProviderKind.IMAGE_MODEL;
                 case VIDEO_GENERATION -> ProviderKind.VIDEO_MODEL;
                 case COMFYUI -> ProviderKind.COMFYUI_MODEL;
+                case VOICE_GENERATION -> ProviderKind.VOICE_MODEL;
                 default -> ProviderKind.TEXT_MODEL;
             };
             default -> throw invalid("未知提供商字段");

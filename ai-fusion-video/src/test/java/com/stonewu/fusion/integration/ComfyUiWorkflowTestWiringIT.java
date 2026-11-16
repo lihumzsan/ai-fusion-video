@@ -2,6 +2,8 @@ package com.stonewu.fusion.integration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.stonewu.fusion.entity.ai.AiModel;
+import com.stonewu.fusion.mapper.ai.AiModelMapper;
 import com.stonewu.fusion.security.TokenService;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService;
 import com.sun.net.httpserver.HttpExchange;
@@ -83,6 +85,7 @@ class ComfyUiWorkflowTestWiringIT {
     @Autowired TokenService tokens;
     @Autowired JdbcTemplate jdbc;
     @Autowired ComfyUiWorkflowService workflows;
+    @Autowired AiModelMapper models;
     @AfterAll static void stopProvider() { PROVIDER.stop(0); }
 
     @Test void submissionReturnsBeforeCompletionAndReplaysOnlyOneProviderPost() {
@@ -110,6 +113,23 @@ class ComfyUiWorkflowTestWiringIT {
         assertThat(post("/version/test", changed, f).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(ok(get("/version/tests?versionId=" + f.version, f))).hasSize(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM afv_media_job_event WHERE job_id = ?", Integer.class, id)).isPositive();
+
+        var model = AiModel.builder().name("固定绑定回归模型").code(f.prompt).modelType(2)
+                .apiConfigId(f.user).comfyuiWorkflowId(f.workflow).maxConcurrency(1).build();
+        models.insert(model);
+        var generation = Map.of("requestId", UUID.randomUUID().toString(), "scope", Map.of("userId", f.user),
+                "modelId", model.getId(), "prompt", f.prompt, "width", 64, "height", 64, "count", 1);
+        String taskId = ok(http.postForEntity("/api/generation/image/submit",
+                new HttpEntity<>(generation, f.headers), JsonNode.class)).asText();
+
+        await().atMost(Duration.ofSeconds(25)).untilAsserted(() -> {
+            var execution = http.exchange("/api/generation/image/" + taskId + "/execution", HttpMethod.GET,
+                    new HttpEntity<>(f.headers), JsonNode.class);
+            var data = ok(execution);
+            assertThat(data.path("state").asText()).as(data.toString()).isEqualTo("SUCCEEDED");
+        });
+        assertThat(f.remote.posts).hasValue(2);
+        assertThat(workflows.getVersion(f.version).getWorkflowHash()).isEqualTo(f.hash);
     }
 
     @Test void draftChangesPreventAnOlderSuccessfulRunFromMarkingNewContentPassed() {

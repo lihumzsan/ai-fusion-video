@@ -8,6 +8,7 @@ import type {
   CanvasNodeKind,
   CanvasValueType,
 } from "./types";
+import { canvasAgentKinds } from "./agent-types";
 import { canvasFieldLabels, canvasPortLabels } from "./labels";
 import { validateCanvasConfig } from "./config";
 import { portType, portTypes } from "./graph";
@@ -23,6 +24,7 @@ const modelKinds: Partial<Record<CanvasNodeKind, string>> = {
   videoGeneration: "video",
   textGeneration: "text",
   comfyui: "comfyui",
+  voiceGeneration: "voice",
 };
 
 export function modelKind(kind: CanvasNodeKind) {
@@ -47,8 +49,13 @@ export function modelForVersion(model: CanvasModelOption, versionId: CanvasConfi
 export function modelsForNode(kind: CanvasNodeKind, catalog: CanvasCatalog) {
   return catalog.models.filter(
     (model) =>
-      model.kind === (modelKinds[kind] ?? "text") && !model.unavailable,
+      model.kind === (modelKinds[kind] ?? "text") && !model.unavailable &&
+      modelSupportsNode(kind, model),
   );
+}
+
+export function modelSupportsNode(kind: CanvasNodeKind, model: CanvasModelOption) {
+  return !canvasAgentKinds.includes(kind) || model.parameters.supportsAgentTools !== false;
 }
 
 export function modelFitsInputs(
@@ -208,6 +215,14 @@ export function validateModelNode(
       { [input.id]: 1 },
     );
   }
+  if (node.kind === "voiceGeneration" && node.config.apiConfigId !== undefined) {
+    if (node.config.modelId !== undefined) {
+      return "参考音频节点只保留一种模型配置";
+    }
+    return catalog.voiceServices.some((service) => service.id === node.config.apiConfigId)
+      ? null
+      : "请选择已启用的 ComfyUI 服务";
+  }
   if (["musicGeneration", "sfxGeneration"].includes(node.kind)) {
     return catalog.audioServices.some(
       (service) => service.id === node.config.apiConfigId,
@@ -217,6 +232,12 @@ export function validateModelNode(
   }
   const kind = modelKinds[node.kind];
   if (!kind) {
+    if (canvasAgentKinds.includes(node.kind)) {
+      const model = catalog.models.find((item) => item.id === node.config.modelId);
+      if (model && !modelSupportsNode(node.kind, model)) {
+        return "当前模型不支持工具调用，请更换思考模型";
+      }
+    }
     return null;
   }
   const selected = catalog.models.find((item) => item.id === node.config.modelId);
@@ -297,6 +318,10 @@ export function validateModelNode(
     if (["firstFrame", "lastFrame", "referenceImages"].includes(port.id)) {
       images += count;
     }
+  }
+  const minimumReferences = inputs.referenceImages?.minimum ?? 0;
+  if (kind === "comfyui" && minimumReferences > 0 && !connected.has("referenceImages")) {
+    return `请至少连接 ${minimumReferences} 张参考图`;
   }
   if (
     typeof model.parameters.maxImageInputs === "number" &&

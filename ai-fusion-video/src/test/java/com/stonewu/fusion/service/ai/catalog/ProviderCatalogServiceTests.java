@@ -8,6 +8,7 @@ import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.service.ai.ApiConfigService;
 import com.stonewu.fusion.service.ai.model.AiModelMetadataResolver;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.io.InputStream;
 import java.util.List;
@@ -21,7 +22,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.ArgumentMatchers.any;
 
 class ProviderCatalogServiceTests {
-    private final ProviderCatalogService catalog = new ProviderCatalogService(new ObjectMapper());
+    private final ProviderCatalogService catalog = new ProviderCatalogService(new ObjectMapper(), new MockEnvironment());
 
     ProviderCatalogServiceTests() throws Exception {
     }
@@ -36,7 +37,7 @@ class ProviderCatalogServiceTests {
         var source = mock(ObjectMapper.class);
         doReturn(List.of(hidden, catalog.require("infistar")))
                 .when(source).readValue(any(InputStream.class), any(TypeReference.class));
-        var updated = new ProviderCatalogService(source);
+        var updated = new ProviderCatalogService(source, new MockEnvironment());
         assertThat(updated.list()).extracting(ProviderDefinition::id).containsExactly("infistar");
         var config = ApiConfig.builder().providerId("metaso").platform("openai_compatible")
                 .apiKey("fixture-key").status(1).build();
@@ -52,7 +53,7 @@ class ProviderCatalogServiceTests {
         var independent = json.convertValue(definition, ProviderDefinition.class);
         var source = mock(ObjectMapper.class);
         doReturn(List.of(independent)).when(source).readValue(any(InputStream.class), any(TypeReference.class));
-        var updated = new ProviderCatalogService(source);
+        var updated = new ProviderCatalogService(source, new MockEnvironment());
         assertThat(updated.require("infistar").sponsored()).isFalse();
         assertThat(updated.require("infistar").quickSetup()).isTrue();
         var config = ApiConfig.builder().providerId("infistar").platform("openai_compatible").build();
@@ -77,6 +78,21 @@ class ProviderCatalogServiceTests {
         assertThatCode(() -> catalog.validateBinding(custom)).doesNotThrowAnyException();
         custom.setProviderId("unregistered-provider");
         assertThatThrownBy(() -> catalog.validateBinding(custom)).hasMessageContaining("提供商不存在");
+    }
+
+    @Test
+    void exposesCodexOnlyForNonDockerLocalProfiles() throws Exception {
+        var environment = new MockEnvironment();
+        environment.setActiveProfiles("local");
+        var local = new ProviderCatalogService(new ObjectMapper(), environment);
+        var config = ApiConfig.builder().providerId("codex").platform("codex").build();
+
+        assertThat(local.list()).extracting(ProviderDefinition::id).contains("codex");
+        assertThatCode(() -> local.validateBinding(config)).doesNotThrowAnyException();
+        environment.addActiveProfile("docker");
+        var docker = new ProviderCatalogService(new ObjectMapper(), environment);
+        assertThat(docker.list()).extracting(ProviderDefinition::id).doesNotContain("codex");
+        assertThatThrownBy(() -> docker.validateBinding(config)).hasMessageContaining("本机环境");
     }
 
     /** 相同模型经不同渠道调用时，赞助身份不得绕过显式协议选择。 */

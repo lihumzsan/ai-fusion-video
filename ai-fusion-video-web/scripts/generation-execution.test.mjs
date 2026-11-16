@@ -48,6 +48,43 @@ const { resolveGenerationCapabilities, workflowInputIssue } = load(
 const videoRules = load("lib/video-model-rules.ts");
 const { resolutionChoices } = load("lib/image-output-sizes.ts");
 
+test("H3 reference audio is uploaded as managed media and submitted by resource ID", async (t) => {
+  const id = "098eaf28-b156-4a2f-abe4-e982730ee558";
+  const audio = new File(["WAV sample"], "reference.wav", { type: "audio/wav" });
+  const uploads = [];
+  cache.set(path.join(root, "lib/api/media.ts"), { exports: {
+    uploadMedia: async (file, options) => {
+      uploads.push({ file, options });
+      return { id };
+    },
+  } });
+  cache.set(path.join(root, "lib/api/storage.ts"), { exports: {
+    uploadFile: () => assert.fail("reference audio must use the managed media endpoint"),
+  } });
+  t.after(() => {
+    cache.delete(path.join(root, "lib/api/media.ts"));
+    cache.delete(path.join(root, "lib/api/storage.ts"));
+    cache.delete(path.join(root, "components/dashboard/generation/generation-reference-upload.ts"));
+  });
+
+  const { uploadGenerationReference } = load(
+    "components/dashboard/generation/generation-reference-upload.ts",
+  );
+  const capability = resolveGenerationCapabilities({ modelType: 3, comfyuiWorkflowId: 12,
+    generationConfig: { h3Ref: true, supportReferenceAudios: true, maxReferenceAudios: 3 },
+  }, []);
+  const reference = await uploadGenerationReference(audio, "audio");
+  const request = requests.generationSubmitRequest("video", {
+    ...forms.EMPTY_GENERATION_FORM,
+    referenceAudios: [reference],
+  }, 15, capability);
+
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].file, audio);
+  assert.match(uploads[0].options.requestId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(JSON.parse(request.referenceAudioUrls), [`media://${id}`]);
+});
+
 test("GPT 图片模型的每个固定比例都能选择三个档位，提交时保留档位和比例", () => {
   const presets = ["openai/image.json", "openai/image-25.json"].flatMap((file) =>
     JSON.parse(fs.readFileSync(path.resolve(root, "../ai-fusion-video/src/main/resources/model-presets", file), "utf8")),
@@ -126,6 +163,20 @@ test("workbench uses parsed workflow counts to reject missing, excess and unboun
   assert.match(workflowInputIssue(capability, { referenceImages: 3 }), /至少 4/);
   assert.match(workflowInputIssue(capability, { referenceImages: 5 }), /最多.*4/);
   assert.match(workflowInputIssue(capability, { firstFrame: 1 }), /不支持首帧/);
+});
+
+test("H3 REF workbench selects a ratio and submits without a resolution tier", () => {
+  const capability = resolveGenerationCapabilities({ modelType: 3, comfyuiWorkflowId: 12,
+    generationConfig: { comfyuiWorkflowVersionId: 21, h3Ref: true,
+      supportedAspectRatios: ["16:9", "9:16"], defaultResolution: "1080p" } }, []);
+  const form = labels.generationFormForModel(forms.EMPTY_GENERATION_FORM, capability);
+
+  assert.deepEqual(capability.supportedResolutions, []);
+  assert.equal(form.resolution, "");
+  const request = requests.generationSubmitRequest("video", { ...form, ratio: "9:16", resolution: "720p" }, 15, capability);
+  assert.equal(request.ratio, "9:16");
+  assert.ok(!Object.hasOwn(request, "resolution"));
+  assert.deepEqual(resolveGenerationCapabilities({ modelType: 3 }, []).supportedResolutions, ["720p", "1080p"]);
 });
 const officialPresets = ["volcengine", "minimax", "dashscope"].flatMap(
   (vendor) =>

@@ -97,9 +97,9 @@ public class CanvasTemplateBindingResolver {
                     throw invalid("此提供商绑定不接受额外版本字段");
                 }
                 if (slot.kind() == ProviderKind.AUDIO_API) {
-                    models.requireAudio(id);
-                    name = models.audioServices().stream().filter(item -> item.id() == id).findFirst().orElseThrow()
-                            .name();
+                    name = models.requireAudio(id).getName();
+                } else if (slot.kind() == ProviderKind.VOICE_API) {
+                    name = models.requireVoice(id).getName();
                 } else if (slot.kind() == ProviderKind.WORKFLOW) {
                     name = "工作流版本 #" + id;
                 } else {
@@ -109,6 +109,7 @@ public class CanvasTemplateBindingResolver {
                         case IMAGE_MODEL -> "image";
                         case VIDEO_MODEL -> "video";
                         case COMFYUI_MODEL -> "comfyui";
+                        case VOICE_MODEL -> "voice";
                         default -> throw invalid("提供商类型无效");
                     };
                     if (!Objects.equals(model.kind(), kind)) {

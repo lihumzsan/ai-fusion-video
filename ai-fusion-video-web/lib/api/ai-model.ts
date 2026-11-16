@@ -4,6 +4,12 @@ export type MultimodalInputType = "image" | "video" | "audio" | "file";
 export type MultimodalInputTransport = "url" | "base64";
 export type MultimodalInputTransports = Partial<Record<MultimodalInputType, MultimodalInputTransport[]>>;
 
+export const COMFYUI_VOICE_MODEL = {
+  type: 4,
+  code: "qwen3-tts-voice-design-1.7b",
+  name: "Qwen3-TTS VoiceDesign 1.7B",
+} as const;
+
 // ========== 类型定义 ==========
 
 /** AI 模型 */
@@ -229,7 +235,8 @@ export const PLATFORM_OPTIONS = [
   { value: "dashscope", label: "阿里 DashScope", description: "阿里云百炼 / DashScope（通义千问、万相、Qwen-Image）" },
   { value: "anthropic", label: "Anthropic", description: "Claude 系列模型" },
   { value: "ollama", label: "Ollama", description: "本地部署的开源模型" },
-  { value: "comfyui", label: "ComfyUI", description: "ComfyUI Native API；通过已发布工作流生成图片或视频" },
+  { value: "codex", label: "本机 Codex", description: "使用后端运行账号的 Codex 登录，支持对话和文本解析" },
+  { value: "comfyui", label: "ComfyUI", description: "通过 ComfyUI 生成图片、视频或参考音频" },
   { value: "sonilo", label: "Sonilo", description: "按画面生成配乐 / 音效；启用后本集合成完成时自动配乐" },
 ] as const;
 
@@ -238,7 +245,7 @@ export const MODEL_TYPE_OPTIONS = [
   { value: 1, label: "对话" },
   { value: 2, label: "图像生成" },
   { value: 3, label: "视频生成" },
-  { value: 4, label: "语音合成" },
+  { value: 4, label: "音频生成" },
   { value: 5, label: "语音识别" },
 ] as const;
 
@@ -247,7 +254,7 @@ export const MODEL_TYPE_LABELS: Record<number, string> = {
   1: "对话",
   2: "图像生成",
   3: "视频生成",
-  4: "语音合成",
+  4: "音频生成",
   5: "语音识别",
 };
 
@@ -268,6 +275,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
   dashscope: "DashScope",
   anthropic: "Anthropic",
   ollama: "Ollama",
+  codex: "本机 Codex",
   comfyui: "ComfyUI",
   sonilo: "Sonilo",
 };
@@ -305,6 +313,17 @@ export const aiModelApi = {
     return http.get<never, PageResult<AiModel>>(`/api/ai/model/page?${query.toString()}`);
   },
 
+  /** 管理页需要保留停用模型，便于重新启用。 */
+  listAll: async (): Promise<AiModel[]> => {
+    const pageSize = 100;
+    const firstPage = await aiModelApi.page({ pageNo: 1, pageSize });
+    const followingPages = await Promise.all(
+      Array.from({ length: Math.max(0, Math.ceil(firstPage.total / pageSize) - 1) }, (_, index) =>
+        aiModelApi.page({ pageNo: index + 2, pageSize })),
+    );
+    return [firstPage, ...followingPages].flatMap((page) => page.list);
+  },
+
   /** 创建 AI 模型 */
   create: (data: AiModelCreateReq) =>
     http.post<never, number>("/api/ai/model/create", data),
@@ -329,6 +348,9 @@ export const aiModelApi = {
 };
 
 export const apiConfigApi = {
+  codexStatus: () =>
+    http.get<never, { available: boolean; signedIn: boolean }>("/api/ai/api-config/codex-status"),
+
   /** 获取 API 配置详情 */
   get: (id: number) => http.get<never, ApiConfig>(`/api/ai/api-config/get?id=${id}`),
 

@@ -212,7 +212,7 @@ public class AiAgentRegistry {
                                 .toolName("episode_script_creator")
                                 .displayName("分集剧本创作器")
                                 .description(
-                                        "对指定分集进行对白和场次创作。输入分集编号，子Agent会自动查询大纲、设计场次、创作对白并保存。可同时调用多个实例并行处理不同分集。调用时只传声明中要求的业务参数，不要传 session_id，框架会自动维护会话。")
+                                        "按分集记录 ID 查询故事原文和大纲，创作并保存场次、动作和对白。可并行处理不同分集。调用时只传声明中的业务参数，不传 session_id。")
                                 .parametersSchema(
                                         """
                                                 {
@@ -248,7 +248,7 @@ public class AiAgentRegistry {
                         <project_id>{projectId}</project_id>
                         <script_id>{scriptId}</script_id>
                         </task_context>""")
-                .defaultUserMessage("请根据项目 {projectId} 的剧本大纲（ID: {scriptId}），创作完整的分集场次和对白内容。")
+                .defaultUserMessage("请将项目 {projectId} 的故事原文或大纲（剧本 ID：{scriptId}）改编为包含场次、动作和角色对白的剧本。")
                 .enableTools(1)
                 .build());
     }

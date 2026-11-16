@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -98,14 +99,37 @@ public class ComfyUiNativeClient {
                                            String fileName,
                                            String contentType,
                                            String subfolder) {
+        String mime = StrUtil.blankToDefault(contentType, "").split(";", 2)[0].trim();
+        if (!mime.startsWith("image/")) {
+            throw new BusinessException(400, "ComfyUI 图片上传需要有效的图片 Content-Type");
+        }
+        return uploadInput(apiConfig, bytes, fileName, mime, subfolder, "图片");
+    }
+
+    /**
+     * 原生上传接口沿用名为 image 的表单文件字段，LoadAudio 从 input 目录读取音频。
+     */
+    public ComfyUiUploadResult uploadAudio(ApiConfig apiConfig,
+                                           byte[] bytes,
+                                           String fileName,
+                                           String contentType,
+                                           String subfolder) {
+        if (!"audio/mpeg".equals(contentType) && !"audio/wav".equals(contentType)) {
+            throw new BusinessException(400, "ComfyUI 参考音频仅支持 MP3 或 WAV");
+        }
+        return uploadInput(apiConfig, bytes, fileName, contentType, subfolder, "音频");
+    }
+
+    private ComfyUiUploadResult uploadInput(ApiConfig apiConfig, byte[] bytes, String fileName,
+                                            String contentType, String subfolder, String label) {
         if (bytes == null || bytes.length == 0) {
-            throw new BusinessException(400, "上传到 ComfyUI 的图片不能为空");
+            throw new BusinessException(400, "上传到 ComfyUI 的" + label + "不能为空");
         }
         String safeFileName = safeFileName(fileName);
         MultipartBody.Builder body = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("image", safeFileName,
-                        RequestBody.create(bytes, MediaType.get(normalizeContentType(contentType))))
+                        RequestBody.create(bytes, MediaType.get(contentType)))
                 .addFormDataPart("type", "input")
                 .addFormDataPart("overwrite", "false");
         if (StrUtil.isNotBlank(subfolder)) {
@@ -114,7 +138,7 @@ public class ComfyUiNativeClient {
         Request request = request(apiConfig, "/upload/image")
                 .post(body.build())
                 .build();
-        JsonNode response = executeJson(apiConfig, request, "上传输入图片", 200);
+        JsonNode response = executeJson(apiConfig, request, "上传输入" + label, 200);
         String name = requiredText(response, "name", "ComfyUI 上传响应缺少 name");
         String returnedSubfolder = requiredString(
                 response, "subfolder", "ComfyUI 上传响应缺少 subfolder");
@@ -157,6 +181,18 @@ public class ComfyUiNativeClient {
     public ComfyUiJobResult getJob(ApiConfig apiConfig, String promptId) {
         String canonicalPromptId = validatePromptId(promptId);
         JsonNode response = getJson(apiConfig, "/api/jobs/" + canonicalPromptId, "查询工作流任务");
+        return parseJob(canonicalPromptId, response);
+    }
+
+    /** 只有原生 Jobs API 确认标识不存在时才返回空值。 */
+    public Optional<ComfyUiJobResult> findJob(ApiConfig apiConfig, String promptId) {
+        String canonicalPromptId = validatePromptId(promptId);
+        Request request = request(apiConfig, "/api/jobs/" + canonicalPromptId).get().build();
+        JsonNode response = executeJson(apiConfig, request, "查询工作流任务", 200, true);
+        return response == null ? Optional.empty() : Optional.of(parseJob(canonicalPromptId, response));
+    }
+
+    private ComfyUiJobResult parseJob(String canonicalPromptId, JsonNode response) {
         String id = requiredText(response, "id", "ComfyUI Job 响应缺少 id");
         String status = requiredText(response, "status", "ComfyUI Job 响应缺少 status");
         if (!id.equals(canonicalPromptId)) {
@@ -273,8 +309,16 @@ public class ComfyUiNativeClient {
                                  Request request,
                                  String operation,
                                  int expectedStatus) {
+        return executeJson(apiConfig, request, operation, expectedStatus, false);
+    }
+
+    private JsonNode executeJson(ApiConfig apiConfig, Request request, String operation, int expectedStatus,
+                                 boolean allowMissingJob) {
         try (Response response = client(apiConfig).newCall(request).execute()) {
             String body = readJsonBody(response);
+            if (allowMissingJob && response.code() == 404 && isOfficialMissingJob(body)) {
+                return null;
+            }
             if (response.code() != expectedStatus) {
                 throw httpError(operation, response, body);
             }
@@ -287,6 +331,11 @@ public class ComfyUiNativeClient {
         } catch (IOException e) {
             throw remoteError(operation, e);
         }
+    }
+
+    private boolean isOfficialMissingJob(String body) throws JsonProcessingException {
+        JsonNode error = objectMapper.readTree(body);
+        return error != null && "Job not found".equals(error.path("error").asText());
     }
 
     private Request.Builder request(ApiConfig apiConfig, String path) {
@@ -421,17 +470,6 @@ public class ComfyUiNativeClient {
             throw new BusinessException(400, "ComfyUI 上传子目录不安全");
         }
         return subfolder;
-    }
-
-    private String normalizeContentType(String value) {
-        if (StrUtil.isBlank(value)) {
-            throw new BusinessException(400, "ComfyUI 上传图片缺少 Content-Type");
-        }
-        String contentType = value.split(";", 2)[0].trim();
-        if (!contentType.startsWith("image/")) {
-            throw new BusinessException(400, "ComfyUI /upload/image 只接受图片");
-        }
-        return contentType;
     }
 
     private String extensionOf(String filename) {

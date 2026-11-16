@@ -19,6 +19,8 @@ public interface ResourceCommandMapper extends BaseMapper<ResourceCommandEntity>
 
     int appendEvent(@Param("row") ResourceEventEntity row);
 
+    boolean scriptSourceChangedAfter(@Param("scriptId") long scriptId, @Param("startedAt") LocalDateTime startedAt);
+
     long head(@Param("lock") boolean lock);
 
     ResourceEventEntity nextEvent();

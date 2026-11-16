@@ -9,6 +9,7 @@ import lombok.Data;
 import java.util.List;
 import java.util.Map;
 
+/** 创建一个 AI 模型配置。 */
 @Schema(description = "创建AI模型请求")
 @Data
 public class AiModelCreateReqVO {
@@ -18,6 +19,7 @@ public class AiModelCreateReqVO {
     private String code;
     private String modelProtocol;
     private String capabilityPresetCode;
+    @Schema(description = "1-文本对话，2-图片生成，3-视频生成，4-参考音频生成")
     @NotNull(message = "模型类型不能为空")
     private Integer modelType;
     private String icon;
@@ -39,5 +41,6 @@ public class AiModelCreateReqVO {
     @NotNull(message = "API配置不能为空")
     private Long apiConfigId;
 
+    @Schema(description = "已发布工作流 ID，仅 ComfyUI 图片和视频模型使用")
     private Long comfyuiWorkflowId;
 }

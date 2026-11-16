@@ -8,6 +8,8 @@ import com.stonewu.fusion.controller.generation.vo.GenerationScopeReqVO;
 import com.stonewu.fusion.convert.ai.ComfyUiWorkflowConvert;
 import com.stonewu.fusion.entity.ai.ComfyUiWorkflow;
 import com.stonewu.fusion.entity.ai.ComfyUiWorkflowVersion;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiH3RefProfile;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowDocumentService;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowValidationService;
 import com.stonewu.fusion.service.ai.comfyui.test.ComfyUiTestService;
@@ -25,10 +27,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.List;
 
 import static com.stonewu.fusion.common.CommonResult.success;
 
+/** 管理 ComfyUI 工作流、版本发布与试运行。 */
 @Tag(name = "ComfyUI 工作流管理")
 @RestController
 @RequestMapping("/api/ai/comfyui/workflow")
@@ -37,9 +41,16 @@ import static com.stonewu.fusion.common.CommonResult.success;
 public class ComfyUiWorkflowController {
 
     private final ComfyUiWorkflowService workflowService;
+    private final ComfyUiWorkflowDocumentService documents;
     private final ComfyUiWorkflowValidationService validationService;
     private final CanvasActorResolver actors;
     private final ComfyUiTestService tests;
+
+    @GetMapping("/presets/h3-ref")
+    @Operation(summary = "获取 H3 REF 工作流预设")
+    public CommonResult<String> h3RefPreset(@RequestParam("apiConfigId") Long apiConfigId) throws IOException {
+        return success(validationService.h3RefPreset(apiConfigId));
+    }
 
     @PostMapping("/create")
     @Operation(summary = "创建 ComfyUI 工作流")
@@ -125,15 +136,26 @@ public class ComfyUiWorkflowController {
     @Operation(summary = "获取 ComfyUI 工作流版本")
     public CommonResult<ComfyUiWorkflowVersionRespVO> getVersion(@RequestParam("id") Long id) {
         ComfyUiWorkflowVersion version = workflowService.getVersion(id);
-        return success(version == null ? null : ComfyUiWorkflowConvert.INSTANCE.convertVersion(version));
+        if (version == null) {
+            return success(null);
+        }
+        int modelType = workflowService.requireWorkflow(version.getWorkflowId()).getModelType();
+        return success(versionResponse(modelType, version));
     }
 
     @GetMapping("/versions")
     @Operation(summary = "查询 ComfyUI 工作流版本")
     public CommonResult<List<ComfyUiWorkflowVersionRespVO>> versions(
             @RequestParam("workflowId") Long workflowId) {
-        return success(ComfyUiWorkflowConvert.INSTANCE.convertVersionList(
-                workflowService.getVersions(workflowId)));
+        int modelType = workflowService.requireWorkflow(workflowId).getModelType();
+        return success(workflowService.getVersions(workflowId).stream()
+                .map(version -> versionResponse(modelType, version)).toList());
+    }
+
+    private ComfyUiWorkflowVersionRespVO versionResponse(int modelType, ComfyUiWorkflowVersion version) {
+        var response = ComfyUiWorkflowConvert.INSTANCE.convertVersion(version);
+        response.setH3Ref(ComfyUiH3RefProfile.matches(modelType, version, documents));
+        return response;
     }
 
     @PostMapping("/publish")

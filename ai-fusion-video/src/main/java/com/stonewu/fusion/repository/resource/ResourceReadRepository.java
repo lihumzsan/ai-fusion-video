@@ -93,6 +93,11 @@ public class ResourceReadRepository {
                 .findFirst();
     }
 
+    /** 在项目行锁内读取并锁定当前剧本。 */
+    public Optional<Long> lockScriptForProject(long projectId) {
+        return Optional.ofNullable(scripts.lockLatest(projectId));
+    }
+
     public List<Long> scriptChildren(CanvasValueType type, long parentId) {
         return switch (type) {
             case SCRIPT_EPISODE -> episodes.selectList(new LambdaQueryWrapper<ScriptEpisode>()

@@ -21,6 +21,14 @@
         VALUES (#{row.eventId}, #{row.commandId}, #{row.resourceType}, #{row.resourceId}, #{row.projectId},
             #{row.resourceVersion}, #{row.deleted}, #{row.changedFields}, UTC_TIMESTAMP(6))
     </insert>
+    <select id="scriptSourceChangedAfter" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM afv_resource_event
+            WHERE resource_type = 'script' AND resource_id = #{scriptId} AND create_time &gt; #{startedAt}
+              AND (deleted OR JSON_CONTAINS(changed_fields, '"rawContent"')
+                           OR JSON_CONTAINS(changed_fields, '"deleted"'))
+        )
+    </select>
     <select id="head" resultType="long">
         SELECT last_sequence FROM afv_resource_feed_head WHERE id = 1
         <if test="lock">FOR UPDATE</if>

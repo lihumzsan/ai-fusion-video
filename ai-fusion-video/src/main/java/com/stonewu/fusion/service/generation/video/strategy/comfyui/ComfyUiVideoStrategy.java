@@ -112,6 +112,7 @@ public class ComfyUiVideoStrategy implements VideoGenerationStrategy {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("prompt", StrUtil.blankToDefault(task.getPrompt(), ""));
         values.put("duration", task.getDuration());
+        values.put("ratio", task.getRatio());
         values.put("count", Math.max(1, task.getCount()));
         values.put("seed", task.getSeed() != null && task.getSeed() >= 0 ? task.getSeed() : randomSeed());
         values.put("generateAudio", task.getGenerateAudio());

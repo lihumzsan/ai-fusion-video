@@ -178,7 +178,7 @@ export function CanvasConfigFields({
           disabled={disabled}
         />
       )}
-      {capability.configFields.apiConfigId && (
+      {capability.configFields.apiConfigId && capability.kind !== "voiceGeneration" && (
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium">音频服务 *</span>
           <CanvasSelect

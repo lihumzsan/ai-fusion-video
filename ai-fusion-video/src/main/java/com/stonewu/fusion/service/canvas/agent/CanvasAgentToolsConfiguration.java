@@ -130,8 +130,9 @@ public class CanvasAgentToolsConfiguration {
     @Bean
     ToolExecutor getCanvasModelsTool(CanvasAgentModels models) {
         return tool("get_canvas_models", "查看可用模型", "分页列出可用于画布的已启用模型及音频服务，每页 40 项，page 从 0 开始。"
+                        + "生成参考音频节点使用 kind=voice 的模型并填写 modelId。"
                         + "传 modelId 读取完整能力和已发布工作流版本，details 为按字符分页的 JSON。配置节点前使用真实 ID 核对参数，不返回凭据。",
-                schema(Map.of("kind", choice("模型类别", "text", "image", "video", "comfyui"), "page",
+                schema(Map.of("kind", choice("模型类别", "text", "image", "video", "comfyui", "voice"), "page",
                         integer("目录页码，默认 0"),
                         "modelId", integer("完整能力的模型 ID"), "offset", integer("能力 JSON 的起始字符，默认 0"),
                         "limit", integer("能力 JSON 长度，默认 8000，最多 32000"))), true, models::query);

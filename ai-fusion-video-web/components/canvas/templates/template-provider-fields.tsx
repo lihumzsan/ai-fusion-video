@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { canvasApi } from "@/lib/api/canvas";
 import { canvasMcpApi, type McpContract } from "@/lib/api/canvas-mcp";
 import { getApiErrorMessage } from "@/lib/api/api-error";
-import type { CanvasCatalog } from "@/lib/canvas/types";
+import { modelSupportsNode } from "@/lib/canvas/model-constraints";
+import type { CanvasCatalog, CanvasNodeKind } from "@/lib/canvas/types";
 import type { CanvasTemplate, TemplateBinding, TemplateBindings, TemplateProvider } from "@/lib/api/canvas-templates";
 import { CanvasSelect } from "../forms/canvas-select";
 
-const KINDS = { TEXT_MODEL: "文本模型", IMAGE_MODEL: "图片模型", VIDEO_MODEL: "视频模型", COMFYUI_MODEL: "工作流模型", AUDIO_API: "配乐服务", WORKFLOW: "工作流版本", MCP: "MCP 操作" };
+const KINDS = { TEXT_MODEL: "文本模型", IMAGE_MODEL: "图片模型", VIDEO_MODEL: "视频模型", COMFYUI_MODEL: "工作流模型", VOICE_MODEL: "音频生成模型", AUDIO_API: "配乐服务", VOICE_API: "ComfyUI 服务", WORKFLOW: "工作流版本", MCP: "MCP 操作" };
 export function TemplateProviderFields({ template, bindings, disabled, onChange }: {
   template: CanvasTemplate; bindings: TemplateBindings; disabled: boolean;
   onChange: (provider: TemplateProvider, binding: TemplateBinding) => void;
@@ -27,7 +28,10 @@ export function TemplateProviderFields({ template, bindings, disabled, onChange 
   const items = (slot: TemplateProvider) => {
     if (!data) return [];
     if (slot.kind === "MCP") return data.contracts.filter(item => item.enabled).map(item => ({ value: item.id, label: `${item.name} · v${item.version}` }));
-    if (slot.kind === "AUDIO_API") return data.catalog.audioServices.map(item => ({ value: String(item.id), label: item.name }));
+    if (slot.kind === "AUDIO_API" || slot.kind === "VOICE_API") {
+      const services = slot.kind === "VOICE_API" ? data.catalog.voiceServices : data.catalog.audioServices;
+      return services.map(item => ({ value: String(item.id), label: item.name }));
+    }
     if (slot.kind === "WORKFLOW") {
       const selected = slot.uses.map(use => {
         const model = template.providers.find(provider => provider.kind === "COMFYUI_MODEL" && provider.uses.some(item => item.nodeId === use.nodeId && item.batch === use.batch));
@@ -36,12 +40,20 @@ export function TemplateProviderFields({ template, bindings, disabled, onChange 
       return selected[0]?.versions.filter(version => selected.every(model => model?.versions.some(item => item.id === version.id && !item.unavailable)))
         .map(version => ({ value: String(version.id), label: `${selected[0]!.name} · 版本 ${version.number}` })) ?? [];
     }
-    const kind = { TEXT_MODEL: "text", IMAGE_MODEL: "image", VIDEO_MODEL: "video", COMFYUI_MODEL: "comfyui" }[slot.kind];
-    return data.catalog.models.filter(item => item.kind === kind && !item.unavailable && (kind !== "comfyui" || slot.uses.every(use => {
+    const kind = { TEXT_MODEL: "text", IMAGE_MODEL: "image", VIDEO_MODEL: "video", COMFYUI_MODEL: "comfyui", VOICE_MODEL: "voice" }[slot.kind];
+    const uses = kind === "text" || kind === "comfyui" ? slot.uses.map(use => {
       const node = template.graph.nodes.find(node => node.id === use.nodeId)!;
-      const config = use.batch ? node.config.operationConfig as Record<string, unknown> : node.config;
-      return config.resultType === item.resultType;
-    }))).map(item => ({ value: String(item.id), label: item.name }));
+      return {
+        kind: use.batch ? node.config.operationKind as CanvasNodeKind : node.kind,
+        config: use.batch ? node.config.operationConfig as Record<string, unknown> : node.config,
+      };
+    }) : [];
+    return data.catalog.models.filter(item => item.kind === kind && !item.unavailable && uses.every(use => {
+      if (kind === "text") {
+        return modelSupportsNode(use.kind, item);
+      }
+      return use.config.resultType === item.resultType;
+    })).map(item => ({ value: String(item.id), label: item.name }));
   };
   return <section className="flex flex-col gap-4" aria-label="模板模型与工具">
     <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-medium">选择模型与工具</h3>

@@ -94,7 +94,7 @@ export default function AiModelsPage() {
 
   const loadModels = useCallback(async () => {
     try {
-      const data = await aiModelApi.list();
+      const data = await aiModelApi.listAll();
       setModels(data);
     } catch (err) {
       console.error("加载 AI 模型列表失败:", err);
@@ -310,7 +310,7 @@ export default function AiModelsPage() {
       version: 1,
       exportedAt: new Date().toISOString(),
       apiConfigs: exportedConfigs,
-      models,
+      models: models.filter(model => model.status === 1),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);

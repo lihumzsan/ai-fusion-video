@@ -7,6 +7,7 @@ type JsonRecord = Record<string, unknown>;
 export interface GenerationCapabilities {
   unavailable?: string | null;
   workflowInputs?: Record<string, ComfyUiInputCapability>;
+  h3Ref: boolean;
   supportsReferenceImages: boolean;
   referenceImageInputFormats: string[];
   supportsReferenceImageUrlInput: boolean;
@@ -135,9 +136,10 @@ export function resolveGenerationCapabilities(
 ): GenerationCapabilities {
   const config = resolvedGenerationConfig(model, presets);
   const imageModel = model.modelType === 2;
+  const h3Ref = !imageModel && config.h3Ref === true;
   const advertised = strings(config, [], "supportedResolutions", "resolutions");
   const output = imageModel ? imageOutputOptions(config, advertised) : {
-    supportedResolutions: advertised.length ? advertised : ["720p", "1080p"],
+    supportedResolutions: h3Ref ? [] : advertised.length ? advertised : ["720p", "1080p"],
   };
   const mappedRatios = "imageSizes" in output && output.imageSizes
     ? [...new Set(Object.values(output.imageSizes).flatMap((sizes) => Object.keys(sizes)))] : [];
@@ -163,6 +165,7 @@ export function resolveGenerationCapabilities(
   return {
     unavailable: generationCapabilityError(model),
     workflowInputs: config.comfyuiInputs as Record<string, ComfyUiInputCapability> | undefined,
+    h3Ref,
     supportsReferenceImages: bool(
       config,
       false,
@@ -218,7 +221,7 @@ export function resolveGenerationCapabilities(
         : num(config, 5, "defaultDuration"),
     defaultAspectRatio: imageModel && typeof config.defaultAspectRatio === "string" ? config.defaultAspectRatio : videoRules?.defaultRatio,
     defaultResolution:
-      typeof config.defaultResolution === "string"
+      !h3Ref && typeof config.defaultResolution === "string"
         ? config.defaultResolution
         : undefined,
     videoRules,

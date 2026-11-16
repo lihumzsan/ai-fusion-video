@@ -1,12 +1,15 @@
 package com.stonewu.fusion.service.canvas.capability;
 
+import cn.hutool.crypto.digest.DigestUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
+import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.service.ai.AiModelService;
 import com.stonewu.fusion.service.ai.ApiConfigService;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowCapabilities;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService;
 import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
@@ -15,13 +18,23 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 
+import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
+
 /**
  * 实时、脱敏的模型能力目录。权限和启用状态不缓存，工作流正文沿用不可变版本缓存。
  */
 @Component
 @RequiredArgsConstructor
 public class CanvasModelCatalog {
+    private static final String SONILO = "sonilo";
+    private static final Set<String> SONILO_PLATFORMS = Set.of(SONILO);
+    private static final Set<String> VOICE_PLATFORMS = Set.of(ComfyUiWorkflowService.PLATFORM);
+    private static final Set<String> AUDIO_PLATFORMS = Set.of(SONILO, ComfyUiWorkflowService.PLATFORM);
+
     public record AudioService(long id, String name) {
+    }
+
+    public record VoiceModel(AiModel model, ApiConfig api) {
     }
 
     public record Input(Integer maximum, int minimum, int minimumWhenProvided) {
@@ -52,38 +65,94 @@ public class CanvasModelCatalog {
             "framesWithReferenceVideos",
             "supportCameraFixed",
             "maxImageInputs", "minImageInputs", "supportGenerateAudio", "supportWatermark", "supportSeed", "videoRules",
-            "promptExpansionMode", "referenceTaskType", "outputFormat", "promptExtend");
+            "promptExpansionMode", "referenceTaskType", "outputFormat", "promptExtend", "h3Ref");
 
     public List<Option> list() {
         return models.getEnabledList().stream().map(this::describe).toList();
     }
 
     public List<AudioService> audioServices() {
-        return apis.getListByPlatform("sonilo").stream().map(api -> new AudioService(api.getId(), api.getName()))
+        return audioServices(SONILO);
+    }
+
+    public List<AudioService> voiceServices() {
+        return audioServices(ComfyUiWorkflowService.PLATFORM);
+    }
+
+    private List<AudioService> audioServices(String platform) {
+        return apis.getListByPlatform(platform).stream().map(api -> new AudioService(api.getId(), api.getName()))
                 .toList();
     }
 
-    public void requireAudio(long id) {
-        var api = apis.getById(id);
-        if (api == null || !Integer.valueOf(1).equals(api.getStatus()) || !"sonilo".equals(api.getPlatform())) {
-            throw new BusinessException(400, "请选择已启用的 Sonilo 音频服务");
+    public ApiConfig requireAudio(long id) {
+        return requireAudioService(id, SONILO_PLATFORMS, "请选择已启用的 Sonilo 音频服务");
+    }
+
+    /** 既有参考音频节点按原 API 配置继续使用固定音色设计工作流。 */
+    public ApiConfig requireVoice(long id) {
+        return requireAudioService(id, VOICE_PLATFORMS, "请选择已启用的 ComfyUI 服务");
+    }
+
+    /** 音色节点只允许可执行的 Qwen VoiceDesign 模型和该模型绑定的连接。 */
+    public VoiceModel requireVoiceModel(long id) {
+        var model = requireEnabledModel(id);
+        var api = model.getApiConfigId() == null ? null : apis.getById(model.getApiConfigId());
+        String unavailable = voiceUnavailable(model, api);
+        if (unavailable != null) {
+            throw new BusinessException(400, unavailable);
         }
+        return new VoiceModel(model, api);
+    }
+
+    /** 固化影响音色执行的模型身份及连接归属，连接参数单独使用 API 指纹。 */
+    public String voiceModelFingerprint(AiModel model) {
+        return DigestUtil.sha256Hex(String.join("\n", model.getId().toString(), model.getModelType().toString(),
+                model.getModelProtocol(), model.getCode(), model.getApiConfigId().toString()));
+    }
+
+    /** 审批展示使用已选音频服务的真实名称。 */
+    public String audioServiceName(long id) {
+        return requireAudioService(id, AUDIO_PLATFORMS, "所选音频服务不可用，请重新选择").getName();
+    }
+
+    private ApiConfig requireAudioService(long id, Set<String> platforms, String error) {
+        var api = apis.getById(id);
+        if (api == null || !Integer.valueOf(1).equals(api.getStatus())
+                || api.getPlatform() == null || !platforms.contains(api.getPlatform())) {
+            throw new BusinessException(400, error);
+        }
+        return api;
     }
 
     public Option require(long id) {
-        AiModel model = models.getById(id);
-        if (model == null || !Integer.valueOf(1).equals(model.getStatus())) {
-            throw new BusinessException(400, "所选模型已停用或不存在，请重新选择");
-        }
-        Option option = describe(model);
+        Option option = describe(requireEnabledModel(id));
         if (option.unavailable() != null) {
             throw new BusinessException(400, option.unavailable());
         }
         return option;
     }
 
+    private AiModel requireEnabledModel(long id) {
+        AiModel model = models.getById(id);
+        if (model == null || !Integer.valueOf(1).equals(model.getStatus())) {
+            throw new BusinessException(400, "所选模型已停用或不存在，请重新选择");
+        }
+        return model;
+    }
+
+    /** 校验专业智能体节点所选模型的执行范围。 */
+    public static void requireAgentModel(Option option) {
+        if (!"text".equals(option.kind())) {
+            throw new BusinessException(400, "专业智能体节点请选择文本模型");
+        }
+    }
+
     private Option describe(AiModel model) {
         var api = model.getApiConfigId() == null ? null : apis.getById(model.getApiConfigId());
+        if (Integer.valueOf(ComfyUiVoiceDesign.MODEL_TYPE).equals(model.getModelType())) {
+            return new Option(model.getId(), model.getName(), "voice", "audio", Map.of(), Map.of(), List.of(),
+                    voiceUnavailable(model, api));
+        }
         String result = switch (model.getModelType()) {
             case 1 -> "text";
             case 2 -> "image";
@@ -96,6 +165,11 @@ public class CanvasModelCatalog {
         if (api == null || !Integer.valueOf(1).equals(api.getStatus())) {
             return new Option(model.getId(), model.getName(), kind, result, Map.of(), Map.of(), List.of(),
                     "模型的供应商配置已停用或不存在");
+        }
+        boolean codex = CODEX.equals(api.getPlatform()) || CODEX.equals(model.getModelProtocol());
+        if (codex && !apis.isLocalCodexAvailable()) {
+            return new Option(model.getId(), model.getName(), kind, result, Map.of(),
+                    Map.of("supportsAgentTools", false), List.of(), "Codex 仅在本机环境可用");
         }
         if ("unsupported".equals(result)) {
             return new Option(model.getId(), model.getName(), kind, result, Map.of(), Map.of(), List.of(),
@@ -196,6 +270,19 @@ public class CanvasModelCatalog {
         }
         return new Option(model.getId(), model.getName(), kind, result, Map.copyOf(inputs), Map.copyOf(parameters),
                 List.copyOf(versions), null);
+    }
+
+    private String voiceUnavailable(AiModel model, ApiConfig api) {
+        if (!Integer.valueOf(ComfyUiVoiceDesign.MODEL_TYPE).equals(model.getModelType())
+                || !ComfyUiVoiceDesign.MODEL_CODE.equals(model.getCode())
+                || !ComfyUiWorkflowService.PLATFORM.equals(model.getModelProtocol())) {
+            return "请选择 ComfyUI 的 Qwen3-TTS 1.7B 音色设计模型";
+        }
+        if (api == null || !Integer.valueOf(1).equals(api.getStatus())
+                || !ComfyUiWorkflowService.PLATFORM.equals(api.getPlatform())) {
+            return "音色模型绑定的 ComfyUI 服务已停用或不可用";
+        }
+        return null;
     }
 
     private static boolean enabled(JSONObject config, String first, String second) {

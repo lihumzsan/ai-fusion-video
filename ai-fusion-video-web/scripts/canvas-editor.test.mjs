@@ -764,6 +764,19 @@ test("unconfigured nodes have readable readiness states while partial fields rem
   assert.equal(canvasNodeConfigurationIssue(source,{...capability("text",[]),label:"文本"},catalog,graph),"请填写文本内容");
 });
 
+test("a text-only model can run in a text node but cannot be selected for an agent node", () => {
+  const models = load("lib/canvas/model-constraints.ts");
+  const local = { id: 1, name: "Text-only model", kind: "text", inputs: {}, parameters: { supportsAgentTools: false } };
+  const agent = { id: 2, name: "Agent model", kind: "text", inputs: {}, parameters: {} };
+  const catalog = { models: [local, agent], nodes: [capability("textGeneration", []), capability("storyboardGenerate", [])] };
+  const graph = { nodes: [], edges: [] };
+
+  assert.deepEqual(models.modelsForNode("textGeneration", catalog), [local, agent]);
+  assert.deepEqual(models.modelsForNode("storyboardGenerate", catalog), [agent]);
+  assert.equal(models.validateModelNode(node("saved-text", "textGeneration", { modelId: local.id }), graph, catalog), null);
+  assert.match(models.validateModelNode(node("saved-agent", "storyboardGenerate", { modelId: local.id }), graph, catalog), /不支持工具调用/);
+});
+
 test("model readiness rejects count, mode and version mismatches without limiting node discovery", () => {
   const models = load("lib/canvas/model-constraints.ts");
   const source = node("source", "imageGeneration", {modelId:1,count:4});
@@ -805,6 +818,25 @@ test("ComfyUI version limits and conflicts are shared by node validation and con
   assert.match(models.validateModelNode(target, graph, catalog), /此版本.*冲突/);
   assert.match(canvasConnectionIssue(connection, graph, catalog), /此版本.*冲突/);
   assert.equal(models.modelsForNode("comfyui", catalog).length, 1);
+});
+
+test("ComfyUI run readiness requires the reference image declared by the workflow", () => {
+  const { validateModelNode } = load("lib/canvas/model-constraints.ts");
+  const target = node("target", "comfyui", { modelId: 2, workflowVersionId: 21, resultType: "video" });
+  const source = node("source", "imageGeneration", {});
+  const catalog = {
+    nodes: [capability("imageGeneration", [], [port("images", "image", true)]),
+      capability("comfyui", [port("referenceImages", "image", true)])],
+    models: [{ id: 2, kind: "comfyui", resultType: "video", inputs: {}, parameters: {}, versions: [{
+      id: 21, inputs: { referenceImages: { maximum: 9, minimum: 1, minimumWhenProvided: 1 } },
+      fields: ["referenceImages"], parameters: {}, unavailable: null,
+    }] }],
+  };
+  const graph = { nodes: [source, target], edges: [] };
+
+  assert.match(validateModelNode(target, graph, catalog), /至少连接 1 张参考图/);
+  graph.edges.push(edge("ref", "source", "images", "target", "referenceImages"));
+  assert.equal(validateModelNode(target, graph, catalog), null);
 });
 
 test("node drafts merge independent fields and make same-field changes explicit", () => {
@@ -867,6 +899,49 @@ test("audio nodes can be placed before choosing a service but remain unconfigure
  assert.match(model.validateModelNode(audio,graph,catalog),/音频服务/);
  catalog.audioServices=[{id:12,name:"Music"}];
  assert.equal(model.validateModelNode(audio,graph,catalog),null);
+});
+
+test("reference voice nodes can select an enabled audio model and keep existing service bindings", () => {
+  const { canvasNodeConfigurationIssue } = load("lib/canvas/node-readiness.ts");
+  const { modelsForNode } = load("lib/canvas/model-constraints.ts");
+  const voice = capability("voiceGeneration", [], [port("audio", "audio")], {
+    modelId: { type: "integer", required: false, minimum: 1, maximum: null, enumValues: [] },
+    apiConfigId: { type: "integer", required: false, minimum: 1, maximum: null, enumValues: [] },
+    voiceDescription: { type: "string", required: true, maxLength: 4000, enumValues: [] },
+    previewText: { type: "string", required: true, maxLength: 10000, enumValues: [] },
+    language: { type: "string", required: true, maxLength: null, enumValues: ["Auto", "Chinese"] },
+  });
+  const voiceNode = node("voice", "voiceGeneration", {
+    ...graphTools.initialConfig(voice),
+    apiConfigId: 12,
+    voiceDescription: "沉稳，语速自然",
+    previewText: "  ",
+  });
+  const graph = { schemaVersion: 1, projectId: null, nodes: [voiceNode], edges: [] };
+  const qwen = { id: 46, name: "Qwen3-TTS VoiceDesign 1.7B", kind: "voice", resultType: "audio",
+    inputs: {}, parameters: {}, versions: [], unavailable: null };
+  const catalog = {
+    schemaVersion: 1, nodes: [voice], models: [
+      qwen, { ...qwen, id: 47, unavailable: "已停用" }, { ...qwen, id: 48, kind: "comfyui", resultType: "video" },
+    ],
+    audioServices: [{ id: 12, name: "Music" }],
+    voiceServices: [{ id: 45, name: "ComfyUI" }],
+  };
+  assert.equal(voiceNode.config.language, "Auto");
+  assert.match(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), /试听台词/);
+  voiceNode.config.previewText = "待会儿见。";
+  assert.match(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), /ComfyUI/);
+  voiceNode.config.apiConfigId = 45;
+  assert.equal(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), null);
+  assert.deepEqual(modelsForNode("voiceGeneration", catalog), [qwen]);
+  voiceNode.config.modelId = qwen.id;
+  assert.match(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), /只保留/);
+  delete voiceNode.config.apiConfigId;
+  assert.equal(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), null);
+  voiceNode.config.modelId = 47;
+  assert.match(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), /已停用/);
+  voiceNode.config.modelId = 48;
+  assert.match(canvasNodeConfigurationIssue(voiceNode, voice, catalog, graph), /类型/);
 });
 
 

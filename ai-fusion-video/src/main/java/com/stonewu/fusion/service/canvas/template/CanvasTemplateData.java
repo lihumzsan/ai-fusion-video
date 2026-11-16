@@ -19,7 +19,8 @@ public final class CanvasTemplateData {
     public static final int VERSION = 1;
     public static final int MAX_BYTES = 16 * 1024 * 1024;
 
-    public enum ProviderKind {TEXT_MODEL, IMAGE_MODEL, VIDEO_MODEL, COMFYUI_MODEL, AUDIO_API, WORKFLOW, MCP}
+    public enum ProviderKind {TEXT_MODEL, IMAGE_MODEL, VIDEO_MODEL, COMFYUI_MODEL, VOICE_MODEL, AUDIO_API,
+        VOICE_API, WORKFLOW, MCP}
 
     public record Use(String nodeId, boolean batch, String field) {
     }

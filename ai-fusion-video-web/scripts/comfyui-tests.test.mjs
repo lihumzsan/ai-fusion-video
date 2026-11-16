@@ -24,6 +24,9 @@ const {
   comfyUiTestKey,
   readPendingComfyUiTest,
   comfyUiTestStatus,
+  isH3ReferenceWorkflow,
+  markH3ReferenceWorkflow,
+  h3ReferenceTestFields,
 } = loaded.exports;
 const scope = { userId: 7, teamId: null };
 const original = {
@@ -37,6 +40,33 @@ const original = {
     inputs: { prompt: "原始输入", referenceImageUrls: ["media://original"] },
   },
 };
+
+test("the saved H3 reference graph exposes both media lists with independent limits", () => {
+  const conditioning = { class_type: "MiniMaxH3AudioConditioningT8", inputs: { task_type: "Ref2VA" } };
+  const graph = {
+    6: { class_type: "LoadImage" },
+    7: conditioning,
+    13: { class_type: "MiniMaxH3LearnedLatentUpscaleT8Advanced" },
+    14: conditioning,
+    18: { class_type: "LoadAudio" },
+    168: { class_type: "VHS_VideoCombine", inputs: { filename_prefix: "renamed-output" } },
+  };
+  assert.equal(isH3ReferenceWorkflow(JSON.stringify(graph)), false);
+  assert.equal(isH3ReferenceWorkflow(JSON.stringify({
+    ...graph,
+    168: { ...graph[168], _meta: { aiFusionVideoProfile: "h3-ref" } },
+  })), true);
+  assert.equal(isH3ReferenceWorkflow("{"), false);
+  const legacyCopy = markH3ReferenceWorkflow(JSON.stringify({ ...graph,
+    168: { ...graph[168], _meta: { title: "Final video" } },
+  }));
+  assert.equal(isH3ReferenceWorkflow(legacyCopy), true);
+  assert.equal(JSON.parse(legacyCopy)[168]._meta.title, "Final video");
+  assert.deepEqual(
+    h3ReferenceTestFields.filter((field) => field.name.startsWith("reference")).map(({ name, type, maximum }) => [name, type, maximum]),
+    [["referenceImages", "uploaded_image", 9], ["referenceAudios", "uploaded_audio", 3]],
+  );
+});
 
 test("trial recovery retains frozen request and rejects another user, team or workflow version", () => {
   assert.deepEqual(

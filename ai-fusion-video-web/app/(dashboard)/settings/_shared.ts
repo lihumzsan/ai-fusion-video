@@ -60,6 +60,8 @@ export interface PlatformField {
 
 export function getPlatformFields(platform: string): PlatformField[] {
   switch (platform) {
+    case "codex":
+      return [];
     case "deepseek":
       return [
         { key: "apiUrl", label: "API 地址", placeholder: "https://api.deepseek.com", type: "text", helperText: "留空时使用 DeepSeek 官方地址。" },

@@ -127,8 +127,9 @@ public record VideoModelRules(
             throw new BusinessException("此模型的参考音频需要搭配图片或视频");
         }
 
-        String resolution = choice(config, "supportedResolutions",
-                StrUtil.blankToDefault(supplied.resolution(), config.getStr("defaultResolution")), "分辨率");
+        String resolution = Boolean.TRUE.equals(config.getBool("h3Ref")) ? null
+                : choice(config, "supportedResolutions",
+                        StrUtil.blankToDefault(supplied.resolution(), config.getStr("defaultResolution")), "分辨率");
         String ratio = choice(config, "supportedAspectRatios",
                 StrUtil.blankToDefault(supplied.ratio(), defaultRatio), "画面比例");
         if (inputs.frames() && StrUtil.isNotBlank(frameRatio)) {
@@ -161,14 +162,14 @@ public record VideoModelRules(
                 throw new BusinessException("当前模型不支持此视频时长");
             }
             var durationsByResolution = config.getJSONObject("supportedDurationsByResolution");
-            if (durationsByResolution != null) {
+            if (resolution != null && durationsByResolution != null) {
                 var resolutionDurations = durationsByResolution.getJSONArray(resolution);
                 if (resolutionDurations != null && !resolutionDurations.toList(Integer.class).contains(duration)) {
                     throw new BusinessException(resolution + " 分辨率不支持此视频时长");
                 }
             }
             var resolutionLimits = config.getJSONObject("maxDurationByResolution");
-            if (resolutionLimits != null) {
+            if (resolution != null && resolutionLimits != null) {
                 Integer resolutionMaximum = resolutionLimits.getInt(resolution);
                 if (resolutionMaximum != null && duration > resolutionMaximum) {
                     throw new BusinessException(resolution + " 分辨率的视频最长支持 " + resolutionMaximum + " 秒");

@@ -13,9 +13,13 @@ import com.stonewu.fusion.service.ai.ProviderConfigurationFingerprint;
 import com.stonewu.fusion.service.ai.comfyui.client.ComfyUiConnectionResult;
 import com.stonewu.fusion.service.ai.comfyui.client.ComfyUiNativeClient;
 import com.stonewu.fusion.service.canvas.CanvasJson;
+import com.stonewu.fusion.service.generation.transport.GenerationHttpClients;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -24,6 +28,8 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class ComfyUiWorkflowValidationService {
+
+    private static final Set<String> MODEL_FILE_INPUTS = Set.of("vae_name", "clip_name", "unet_name", "lora_name", "model_name");
 
     private final ApiConfigService apiConfigService;
     private final ComfyUiWorkflowService workflowService;
@@ -43,6 +49,54 @@ public class ComfyUiWorkflowValidationService {
                 .build();
     }
 
+    /** 预设采用目标实例公布的权重路径拼写，保存后沿用普通工作流的精确校验。 */
+    public String h3RefPreset(Long apiConfigId) throws IOException {
+        GenerationHttpClients.requireNoTransaction();
+        ApiConfig apiConfig = requireComfyUiApiConfig(apiConfigId);
+        var template = new ClassPathResource("comfyui/h3-reference-t8-dual-stage-2mp.json");
+        var graph = documentService.parseApiWorkflow(template.getContentAsString(StandardCharsets.UTF_8));
+        Map<String, JsonNode> definitions = new HashMap<>();
+        for (var entry : graph.properties()) {
+            JsonNode node = entry.getValue();
+            String classType = node.path("class_type").asText();
+            var inputs = (ObjectNode) node.get("inputs");
+            for (String field : MODEL_FILE_INPUTS) {
+                String requested = inputs.path(field).asText();
+                if (!requested.contains("/")) {
+                    continue;
+                }
+                JsonNode definition = definitions.computeIfAbsent(classType,
+                        name -> nativeClient.getNodeInfo(apiConfig, name).path(name));
+                String matched = modelFileChoice(choiceOptions(definition, field), requested);
+                if (matched != null) {
+                    inputs.put(field, matched);
+                }
+            }
+        }
+        return graph.toPrettyString();
+    }
+
+    private String modelFileChoice(JsonNode choices, String requested) {
+        Set<String> matches = new LinkedHashSet<>();
+        for (JsonNode choice : choices) {
+            if (!choice.isTextual()) {
+                continue;
+            }
+            String advertised = choice.textValue();
+            if (requested.equals(advertised)) {
+                return advertised;
+            }
+            if (requested.equals(advertised.replace('\\', '/'))) {
+                matches.add(advertised);
+            }
+        }
+        if (matches.size() > 1) {
+            throw new BusinessException(400, "H3 REF 目标实例提供多个相同相对路径的权重选项：" + requested);
+        }
+        return matches.isEmpty() ? null : matches.iterator().next();
+    }
+
+    /** 在线核对目标实例的节点、模型选项与专用工作流端口。 */
     public ComfyUiWorkflowValidationRespVO validateVersion(Long versionId) {
         ComfyUiWorkflowVersion version = workflowService.requireVersion(versionId);
         ComfyUiWorkflow workflow = workflowService.requireWorkflow(version.getWorkflowId());
@@ -51,6 +105,7 @@ public class ComfyUiWorkflowValidationService {
         try {
             nativeClient.testConnection(apiConfig);
             ObjectNode apiWorkflow = documentService.parseApiWorkflow(version.getApiWorkflowJson());
+            boolean h3Ref = workflow.getModelType() == 3 && ComfyUiH3RefProfile.matches(version, apiWorkflow);
             Set<String> missingClasses = new LinkedHashSet<>();
             List<String> invalidModelInputs = new ArrayList<>();
             Map<String, JsonNode> definitionCache = new HashMap<>();
@@ -68,7 +123,11 @@ public class ComfyUiWorkflowValidationService {
                     missingClasses.add(classType);
                     continue;
                 }
-                validateChoiceInputs(nodeId, workflowNode.path("inputs"), definition, invalidModelInputs);
+                validateChoiceInputs(nodeId, workflowNode.path("inputs"), definition, invalidModelInputs, h3Ref);
+            }
+            if (h3Ref && !missingClasses.contains(ComfyUiH3RefProfile.CONDITIONING_CLASS)) {
+                ComfyUiH3RefProfile.validateReferenceSlots(
+                        definitionCache.get(ComfyUiH3RefProfile.CONDITIONING_CLASS), invalidModelInputs);
             }
             boolean valid = missingClasses.isEmpty() && invalidModelInputs.isEmpty();
             String message = valid
@@ -91,24 +150,24 @@ public class ComfyUiWorkflowValidationService {
     private void validateChoiceInputs(String nodeId,
                                       JsonNode workflowInputs,
                                       JsonNode definition,
-                                      List<String> invalidInputs) {
-        JsonNode definitions = definition.path("input");
+                                      List<String> invalidInputs,
+                                      boolean h3Ref) {
         Iterator<Map.Entry<String, JsonNode>> inputs = workflowInputs.fields();
         while (inputs.hasNext()) {
             Map.Entry<String, JsonNode> input = inputs.next();
             if (!input.getValue().isTextual()) {
                 continue;
             }
-            JsonNode inputDefinition = definitions.path("required").get(input.getKey());
-            if (inputDefinition == null) {
-                inputDefinition = definitions.path("optional").get(input.getKey());
+            // H3 的加载节点只是模板，运行时文件名由实际上传的参考素材替换。
+            if (h3Ref && ComfyUiH3RefProfile.isReferencePlaceholder(nodeId, input.getKey())) {
+                continue;
             }
-            if (inputDefinition == null || !inputDefinition.isArray()
-                    || inputDefinition.isEmpty() || !inputDefinition.get(0).isArray()) {
+            JsonNode choices = choiceOptions(definition, input.getKey());
+            if (!choices.isArray()) {
                 continue;
             }
             boolean allowed = false;
-            for (JsonNode choice : inputDefinition.get(0)) {
+            for (JsonNode choice : choices) {
                 if (choice.isTextual() && choice.asText().equals(input.getValue().asText())) {
                     allowed = true;
                     break;
@@ -118,6 +177,15 @@ public class ComfyUiWorkflowValidationService {
                 invalidInputs.add(nodeId + "." + input.getKey() + "=" + input.getValue().asText());
             }
         }
+    }
+
+    private JsonNode choiceOptions(JsonNode definition, String field) {
+        JsonNode definitions = definition.path("input");
+        JsonNode input = definitions.path("required").path(field);
+        if (input.isMissingNode()) {
+            input = definitions.path("optional").path(field);
+        }
+        return input.path(0);
     }
 
     private String buildFailureMessage(Set<String> missingClasses, List<String> invalidInputs) {

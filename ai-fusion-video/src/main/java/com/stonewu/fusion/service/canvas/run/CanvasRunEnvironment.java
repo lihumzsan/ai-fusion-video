@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.Set;
 
+/** 核对运行条件并冻结画布节点的供应商与执行配置。 */
 @Component
 @RequiredArgsConstructor
 public class CanvasRunEnvironment {
@@ -42,7 +43,8 @@ public class CanvasRunEnvironment {
 
     public void validateForRun(CanvasGraph graph, CanvasNode node, Map<String, Integer> observedOutputs) {
         var capability = capabilities.require(node.kind());
-        if (capability.configFields().containsKey("modelId") && !node.config().has("modelId")) {
+        if (capability.configFields().containsKey("modelId") && !node.config().has("modelId")
+                && node.kind() != CanvasNodeKind.VOICE_GENERATION) {
             throw CanvasRunException.invalid("请为“" + node.title() + "”选择模型");
         }
         if (MEDIA_SOURCES.contains(node.kind()) && node.config().path("resourceId").asText().isBlank()) {
@@ -97,10 +99,12 @@ public class CanvasRunEnvironment {
         if (node.kind() == CanvasNodeKind.TEXT_GENERATION) {
             result.setAll(textModels.freeze(node.config().path("modelId").asLong()));
         }
-        if (CanvasMediaExecutor.AUDIO.contains(node.kind())) {
+        if (node.kind() == CanvasNodeKind.VOICE_GENERATION) {
+            freezeVoice(node.config(), result);
+        } else if (CanvasMediaExecutor.AUDIO.contains(node.kind())) {
             long apiId = node.config().path("apiConfigId").asLong();
-            catalog.requireAudio(apiId);
-            result.put("apiConfigId", apiId).put("apiHash", models.fingerprint(models.requireApi(apiId)));
+            var api = catalog.requireAudio(apiId);
+            result.put("apiConfigId", apiId).put("apiHash", models.fingerprint(api));
         }
         if (GENERATION.contains(node.kind())) {
             var kind = kind(node);
@@ -124,6 +128,19 @@ public class CanvasRunEnvironment {
         return result;
     }
 
+    /** 音色节点固定所选模型和连接；旧节点的计划继续固定最初配置的连接。 */
+    private void freezeVoice(ObjectNode config, ObjectNode environment) {
+        if (config.has("modelId")) {
+            var voice = catalog.requireVoiceModel(config.path("modelId").asLong());
+            environment.put("modelId", voice.model().getId())
+                    .put("modelHash", catalog.voiceModelFingerprint(voice.model()))
+                    .put("apiConfigId", voice.api().getId()).put("apiHash", models.fingerprint(voice.api()));
+        } else {
+            var api = catalog.requireVoice(config.path("apiConfigId").asLong());
+            environment.put("apiConfigId", api.getId()).put("apiHash", models.fingerprint(api));
+        }
+    }
+
     public static GenerationKind kind(CanvasNode node) {
         return node.kind() == CanvasNodeKind.IMAGE_GENERATION
                 || (node.kind() == CanvasNodeKind.COMFYUI && node.config().path("resultType").asText().equals("image"))
@@ -140,6 +157,7 @@ public class CanvasRunEnvironment {
         return GENERATION.contains(node.kind()) && kind(node) == GenerationKind.IMAGE ? count(node) : 0;
     }
 
+    /** 工作流预算与实际提交共用冻结版本的时长配置。 */
     public int seconds(CanvasNode node, ObjectNode environment) {
         if (CanvasAgentNodeTypes.KINDS.contains(node.kind())) {
             return node.config().path("maxVideoSeconds").asInt(0);
@@ -151,8 +169,10 @@ public class CanvasRunEnvironment {
         if (!GENERATION.contains(node.kind()) || kind(node) != GenerationKind.VIDEO) {
             return 0;
         }
-        var parameters = JSONUtil.parseObj(environment.path("capability").path("parameters").toString());
-        int duration = VideoModelRules.budgetSeconds(parameters,
+        String config = node.kind() == CanvasNodeKind.COMFYUI
+                ? environment.path("model").path("config").asText()
+                : environment.path("capability").path("parameters").toString();
+        int duration = VideoModelRules.budgetSeconds(JSONUtil.parseObj(config),
                 node.config().has("duration") ? node.config().path("duration").asInt() : null);
         return Math.multiplyExact(duration, count(node));
     }

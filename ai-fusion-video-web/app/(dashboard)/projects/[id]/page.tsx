@@ -37,7 +37,7 @@ import { SafeImage } from "@/components/media/managed-image";
 import { Button } from "@/components/ui/button";
 import { useProject } from "./project-context";
 import { ScriptSummary } from "./_components/script-summary";
-import { ParseScriptDialog } from "@/components/dashboard/parse-script-dialog";
+import { ParseScriptDialog, type ScriptSourceAgent } from "@/components/dashboard/parse-script-dialog";
 import { usePipelineStore } from "@/lib/store/pipeline-store";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -166,27 +166,27 @@ export default function ProjectOverviewPage() {
   }, [loadAllData]);
   useResourceInvalidation(["scripts", "storyboards", "assets"], () => loadAllData(true));
 
-  // AI 生成剧本：创建成功后触发 pipeline
   const { addPipeline, setPanelExpanded, setExpandedTaskId } =
     usePipelineStore();
 
-  const handleAiScriptCreated = (script: { id: number; title: string }) => {
+  const handleScriptSource = (scriptId: number, scriptVersion: number, agentType: ScriptSourceAgent) => {
     const scriptDisplayTitle = project?.name?.trim() || "未命名项目";
+    const taskTitle = agentType === "story_to_script" ? "故事转剧本" : "拆解已有剧本";
 
     // 刷新列表
     loadAllData();
 
     // 启动 pipeline
     const pipelineId = addPipeline({
-      label: `AI 生成剧本 - ${scriptDisplayTitle}`,
+      label: `${taskTitle} - ${scriptDisplayTitle}`,
       projectId,
       request: {
-        agentType: "script_full_parse",
+        agentType,
         toolExecutionMode: "FULL_ACCESS",
         category: "pipeline",
-        title: `AI 剧本解析：${scriptDisplayTitle}`,
+        title: `${taskTitle}：${scriptDisplayTitle}`,
         projectId,
-        context: { scriptId: script.id },
+        context: { scriptId, scriptVersion },
       },
       onComplete: () => {
         // pipeline 完成后刷新剧本数据
@@ -290,9 +290,8 @@ export default function ProjectOverviewPage() {
   const sbStatus = storyboard
     ? storyboardStatusMap[storyboard.status] || storyboardStatusMap[0]
     : null;
-  const scriptHasContent = Boolean(script?.rawContent?.trim())
-    || scriptEpisodeCount > 0
-    || scriptSceneCount > 0;
+  const scriptSource = script?.rawContent ?? "";
+  const scriptHasContent = Boolean(scriptSource.trim()) || scriptEpisodeCount > 0 || scriptSceneCount > 0;
   const storyboardHasContent = storyboardStatistics.episodeCount > 0
     || storyboardStatistics.sceneCount > 0;
 
@@ -434,7 +433,7 @@ export default function ProjectOverviewPage() {
               </Button>
               <Button variant="ai" onClick={() => setShowParseDialog(true)}>
                 <RefreshCw className="h-4 w-4" />
-                {scriptHasContent ? "重新解析内容" : "AI 解析"}
+                处理剧本原文
               </Button>
             </div>
           </div>
@@ -458,11 +457,11 @@ export default function ProjectOverviewPage() {
             open={showParseDialog}
             scriptId={script.id}
             scriptVersion={script.version}
+            initialSource={scriptSource}
             episodeCount={scriptEpisodeCount}
             sceneCount={scriptSceneCount}
-            mode={scriptHasContent ? "reparse" : "create"}
             onClose={() => setShowParseDialog(false)}
-            onCreated={handleAiScriptCreated}
+            onProcess={handleScriptSource}
           />
         )}
       </motion.div>

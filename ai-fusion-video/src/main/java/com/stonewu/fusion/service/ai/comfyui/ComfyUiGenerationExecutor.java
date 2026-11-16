@@ -72,13 +72,31 @@ public class ComfyUiGenerationExecutor {
         return new ComfyUiExecutionContext(model, apiConfig, workflow, version);
     }
 
+    /** 解析动态参考素材或普通上传绑定，再冻结实际提交的工作流。 */
     public ComfyUiPreparedSubmission prepare(ComfyUiExecutionContext context,
                                              String taskKey,
                                              Map<String, Object> rawValues) {
         Map<String, Object> values = new LinkedHashMap<>(rawValues == null ? Map.of() : rawValues);
-        uploadBoundImages(context, taskKey, values);
-        ObjectNode prompt = renderer.render(context.model().getModelType(), context.version(), values);
+        int modelType = context.model().getModelType();
+        if (ComfyUiH3RefProfile.matches(modelType, context.version(), documentService)) {
+            uploadH3References(context.apiConfig(), taskKey, values);
+        } else {
+            uploadBoundImages(context, taskKey, values);
+        }
+        ObjectNode prompt = renderer.render(modelType, context.version(), values);
         return new ComfyUiPreparedSubmission(context, UUID.randomUUID().toString(), prompt);
+    }
+
+    private void uploadH3References(ApiConfig api, String taskKey, Map<String, Object> values) {
+        ComfyUiH3RefProfile.validateReferences(values);
+        var audioField = ComfyUiH3RefProfile.REFERENCE_AUDIOS;
+        var imageField = ComfyUiH3RefProfile.REFERENCE_IMAGES;
+        if (values.get(audioField) != null) {
+            values.put(audioField, inputResourceService.uploadH3ReferenceAudios(api, taskKey,
+                    toStringList(values.get(audioField), audioField)));
+        }
+        values.put(imageField, inputResourceService.uploadImages(api, taskKey, imageField,
+                toStringList(values.get(imageField), imageField)));
     }
 
     public void submit(ComfyUiPreparedSubmission submission) {

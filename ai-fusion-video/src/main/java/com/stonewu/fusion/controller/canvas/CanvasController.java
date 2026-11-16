@@ -25,6 +25,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.List;
 
+/** 画布编辑、读取与能力目录的 HTTP 入口。 */
 @RestController
 @RequestMapping("/api/canvases")
 @RequiredArgsConstructor
@@ -38,8 +39,10 @@ public class CanvasController {
     private final CanvasAgentProfiles profiles;
     private final AgentSkillSelection skills;
 
+    /** 画布可用节点、模型、服务及配置选项。 */
     public record Catalog(int schemaVersion, List<CanvasNodeCapability> nodes, List<CanvasModelCatalog.Option> models,
                           List<CanvasModelCatalog.AudioService> audioServices,
+                          List<CanvasModelCatalog.AudioService> voiceServices,
                           List<CanvasWritebackFields.Field> writebackFields,
                           List<CanvasAgentProfiles.Profile> agentProfiles, List<AgentSkillSelection.Option> skills) {
     }
@@ -49,7 +52,7 @@ public class CanvasController {
         var actor = actors.current();
         return CommonResult.success(
                 new Catalog(CanvasCapabilityRegistry.SCHEMA_VERSION, capabilities.list(), models.list(),
-                        models.audioServices(), CanvasWritebackFields.list(),
+                        models.audioServices(), models.voiceServices(), CanvasWritebackFields.list(),
                         profiles.list(actor.userId()), skills.catalog(actor.userId())));
     }
 

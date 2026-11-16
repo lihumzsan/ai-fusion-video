@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.entity.generation.ImageTask;
 import com.stonewu.fusion.entity.generation.VideoTask;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiInputResourceService;
 import com.stonewu.fusion.service.canvas.CanvasJson;
 import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
 import com.stonewu.fusion.service.generation.ReferenceImageTransportService;
@@ -45,7 +46,7 @@ public class GenerationProviderInputs {
                         submission.context().actor(),
                         job.claim())));
             }
-            task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, api, job.claim()));
+            task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, api, job.claim(), false));
         }
         return task;
     }
@@ -61,8 +62,9 @@ public class GenerationProviderInputs {
         }
         versions.validate(task.getInputMediaVersions(), submission.context().actor());
         capabilities.validateVideoTask(submission.model(), task);
-        versions.validateVideoMedia(task, capabilities.getMergedModelConfig(submission.model()),
-                submission.context().actor());
+        var modelConfig = capabilities.getMergedModelConfig(submission.model());
+        boolean h3 = Boolean.TRUE.equals(modelConfig.getBool("h3Ref"));
+        versions.validateVideoMedia(task, modelConfig, submission.context().actor());
         if (task.getFirstFrameImageUrl() != null) {
             task.setFirstFrameImageUrl(
                     images(List.of(task.getFirstFrameImageUrl()), submission, api, job.claim()).getFirst());
@@ -77,11 +79,11 @@ public class GenerationProviderInputs {
         }
         task.setReferenceVideoUrls(
                 mediaList(task.getReferenceVideoUrls(), "referenceVideoUrls", MediaKind.VIDEO, submission,
-                        job.claim()));
+                        job.claim(), false));
         task.setReferenceAudioUrls(
                 mediaList(task.getReferenceAudioUrls(), "referenceAudioUrls", MediaKind.AUDIO, submission,
-                        job.claim()));
-        task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, api, job.claim()));
+                        job.claim(), h3));
+        task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, api, job.claim(), h3));
         return task;
     }
 
@@ -92,26 +94,31 @@ public class GenerationProviderInputs {
     }
 
     private ObjectNode workflow(ObjectNode raw, GenerationSubmission submission, ApiConfig api,
-                                RemoteGenerationJob.Claim claim) {
+                                RemoteGenerationJob.Claim claim, boolean h3) {
         if (raw == null) {
             return null;
         }
         ObjectNode result = raw.deepCopy();
+        if (h3) {
+            // H3 参考素材通过 VideoTask 的字段传递，工作流覆盖项只保留其他参数。
+            result.remove(List.of("referenceImages", "referenceAudios"));
+        }
         for (String port : List.of("firstFrame", "lastFrame")) {
             if (raw.hasNonNull(port)) {
                 result.put(port, images(List.of(raw.path(port).asText()), submission, api, claim).getFirst());
             }
         }
         for (String port : List.of("referenceImages", "referenceVideos", "referenceAudios")) {
-            if (!raw.has(port)) {
+            if (!result.has(port)) {
                 continue;
             }
             List<String> values = new ArrayList<>();
             raw.path(port).forEach(value -> values.add(value.asText()));
-            List<String> resolved = port.equals("referenceImages") ? images(values, submission, api, claim)
-                    : values.stream().map(value -> MediaReference.managed(value) ? media.generationUrl(value,
-                    submission.context().actor(),
-                    port.equals("referenceVideos") ? MediaKind.VIDEO : MediaKind.AUDIO, claim) : value).toList();
+            List<String> resolved = switch (port) {
+                case "referenceImages" -> images(values, submission, api, claim);
+                case "referenceVideos" -> resolveMedia(values, MediaKind.VIDEO, submission, claim, false);
+                default -> resolveMedia(values, MediaKind.AUDIO, submission, claim, false);
+            };
             var output = result.putArray(port);
             resolved.forEach(output::add);
         }
@@ -119,12 +126,23 @@ public class GenerationProviderInputs {
     }
 
     private String mediaList(String input, String field, MediaKind kind, GenerationSubmission submission,
-                             RemoteGenerationJob.Claim claim) {
+                             RemoteGenerationJob.Claim claim, boolean h3Audio) {
         if (input == null || input.isBlank()) {
             return input;
         }
-        return JSONUtil.toJsonStr(references.parseJsonInputs(input, field).stream().map(value ->
-                MediaReference.managed(value) ? media.generationUrl(value, submission.context().actor(), kind,
-                        claim) : value).toList());
+        return JSONUtil.toJsonStr(resolveMedia(references.parseJsonInputs(input, field), kind, submission, claim,
+                h3Audio));
+    }
+
+    /** 本机 ComfyUI 的 H3 以文件上传接收音频，生成工作者只读取已授权的托管音频。 */
+    private List<String> resolveMedia(List<String> values, MediaKind kind, GenerationSubmission submission,
+                                      RemoteGenerationJob.Claim claim, boolean h3Audio) {
+        var actor = submission.context().actor();
+        if (h3Audio) {
+            return values.stream().map(value -> media.dataUri(value, actor, MediaKind.AUDIO,
+                    ComfyUiInputResourceService.MAX_H3_REFERENCE_AUDIO_BYTES)).toList();
+        }
+        return values.stream().map(value -> MediaReference.managed(value) ? media.generationUrl(value, actor, kind,
+                claim) : value).toList();
     }
 }

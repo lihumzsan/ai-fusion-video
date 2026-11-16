@@ -1,8 +1,17 @@
 package com.stonewu.fusion.service.canvas;
 
+import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.common.BusinessException;
+import com.stonewu.fusion.entity.ai.AiModel;
+import com.stonewu.fusion.entity.ai.ApiConfig;
+import com.stonewu.fusion.entity.ai.ComfyUiWorkflowVersion;
+import com.stonewu.fusion.service.ai.AiModelService;
+import com.stonewu.fusion.service.ai.ApiConfigService;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowCapabilities;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowDocumentService;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService;
 import com.stonewu.fusion.service.canvas.capability.CanvasCapabilityRegistry;
 import com.stonewu.fusion.service.canvas.capability.CanvasModelCatalog;
 import com.stonewu.fusion.service.canvas.command.CanvasGraphChangeSet;
@@ -14,8 +23,11 @@ import com.stonewu.fusion.service.canvas.model.CanvasGraph;
 import com.stonewu.fusion.service.canvas.model.CanvasNode;
 import com.stonewu.fusion.service.canvas.model.CanvasNodeKind;
 import com.stonewu.fusion.service.canvas.model.CanvasNodeLayout;
+import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -92,6 +104,45 @@ class CanvasModelGraphPolicyTests {
         assertThatCode(() -> policy.validateAll(graph(List.of(valid),List.of()),Set.of())).doesNotThrowAnyException();
     }
 
+    @Test
+    void bundledH3WorkflowAcceptsPromptAndRequiresReferenceImageForExecution() throws IOException {
+        var aiModels = mock(AiModelService.class);
+        var apis = mock(ApiConfigService.class);
+        var workflows = mock(ComfyUiWorkflowService.class);
+        var capabilities = mock(GenerationModelCapabilityService.class);
+        var model = AiModel.builder().id(9L).name("H3 REF").modelType(3).status(1).apiConfigId(10L)
+                .modelProtocol("comfyui").comfyuiWorkflowId(30L).build();
+        ComfyUiWorkflowVersion version;
+        try (var template = getClass().getResourceAsStream("/comfyui/h3-reference-t8-dual-stage-2mp.json")) {
+            version = ComfyUiWorkflowVersion.builder().id(31L).versionNo(1).published(true).inputBindingsJson("{}")
+                    .apiWorkflowJson(new String(template.readAllBytes(), StandardCharsets.UTF_8)).build();
+        }
+        var resolver = new ComfyUiWorkflowCapabilities(workflows, new ComfyUiWorkflowDocumentService(json));
+        when(aiModels.getById(9L)).thenReturn(model);
+        when(apis.getById(10L)).thenReturn(ApiConfig.builder().id(10L).platform("comfyui").status(1).build());
+        when(workflows.getVersions(30L)).thenReturn(List.of(version));
+        when(capabilities.getMergedModelConfig(model, 31L)).thenReturn(resolver.describe(model, version, JSONUtil.createObj()));
+        var catalog = new CanvasModelCatalog(aiModels, apis, capabilities, workflows, json);
+        var h3Policy = new CanvasModelGraphPolicy(catalog, new CanvasCapabilityRegistry());
+        var h3 = node("h3", CanvasNodeKind.COMFYUI, config().put("modelId", 9).put("resultType", "video")
+                .put("workflowVersionId", 31).put("prompt", "Two-stage reference video"));
+        var draft = graph(List.of(h3), List.of());
+
+        assertThatCode(() -> h3Policy.validateDraft(draft)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> h3Policy.validateForRun(draft, h3, Map.of()))
+                .isInstanceOf(CanvasException.class).hasMessageContaining("至少连接 1 张参考图");
+
+        var image = node("image", CanvasNodeKind.IMAGE, config());
+        var wired = graph(List.of(image, h3), List.of(edge(image, "media", h3, "referenceImages")));
+        assertThatCode(() -> h3Policy.validateForRun(wired, h3, Map.of())).doesNotThrowAnyException();
+
+        var text = node("prompt", CanvasNodeKind.TEXT, config().put("content", "Upstream prompt"));
+        h3.config().remove("prompt");
+        var upstream = graph(List.of(image, text, h3), List.of(
+                edge(image, "media", h3, "referenceImages"), edge(text, "text", h3, "prompt")));
+        assertThatCode(() -> h3Policy.validateForRun(upstream, h3, Map.of())).doesNotThrowAnyException();
+    }
+
     @Test void disabledModelDoesNotPreventUnrelatedLayoutEdits() {
         var original = node("v",CanvasNodeKind.VIDEO_GENERATION,config().put("modelId",9));
         var moved = new CanvasNode(original.id(),original.kind(),1,"移动后的视图",new CanvasNodeLayout(40,80,null,null,null,false,false),original.config(),null,0,1);
@@ -118,6 +169,26 @@ class CanvasModelGraphPolicyTests {
         var selected = node("audio", CanvasNodeKind.MUSIC_GENERATION, config().put("operation", "music").put("apiConfigId", 12));
         validate(empty, graph(List.of(selected), List.of()), List.of(selected), List.of());
         verify(models).requireAudio(12);
+    }
+
+    @Test
+    void voiceNodesKeepTheirLegacyBindingAndRejectAmbiguousSelections() {
+        var draft = node("voice", CanvasNodeKind.VOICE_GENERATION, config());
+        var draftGraph = graph(List.of(draft), List.of());
+        assertThatCode(() -> policy.validateDraft(draftGraph)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> policy.validateForRun(draftGraph, draft, Map.of())).hasMessageContaining("音色模型");
+
+        var legacy = node("voice", CanvasNodeKind.VOICE_GENERATION, config().put("apiConfigId", 12));
+        assertThatCode(() -> policy.validateForRun(graph(List.of(legacy), List.of()), legacy, Map.of()))
+                .doesNotThrowAnyException();
+        var model = node("voice", CanvasNodeKind.VOICE_GENERATION, config().put("modelId", 32));
+        assertThatCode(() -> policy.validateForRun(graph(List.of(model), List.of()), model, Map.of()))
+                .doesNotThrowAnyException();
+        var ambiguous = node("voice", CanvasNodeKind.VOICE_GENERATION,
+                config().put("apiConfigId", 12).put("modelId", 32));
+        var ambiguousGraph = graph(List.of(ambiguous), List.of());
+        assertThatThrownBy(() -> policy.validateDraft(ambiguousGraph)).hasMessageContaining("只能选择一个");
+        assertThatThrownBy(() -> policy.validateForRun(ambiguousGraph, ambiguous, Map.of())).hasMessageContaining("只能选择一个");
     }
 
     @Test void unconfiguredModelsCanBePlacedButCannotRun() {

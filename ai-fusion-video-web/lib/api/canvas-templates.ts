@@ -3,7 +3,7 @@ import type { CanvasGraph } from "@/lib/canvas/types";
 import type { ResourceType } from "./resource-events";
 import type { ManagedMedia } from "./media";
 
-export type TemplateProviderKind = "TEXT_MODEL" | "IMAGE_MODEL" | "VIDEO_MODEL" | "COMFYUI_MODEL" | "AUDIO_API" | "WORKFLOW" | "MCP";
+export type TemplateProviderKind = "TEXT_MODEL" | "IMAGE_MODEL" | "VIDEO_MODEL" | "COMFYUI_MODEL" | "VOICE_MODEL" | "AUDIO_API" | "VOICE_API" | "WORKFLOW" | "MCP";
 export interface TemplateUse { nodeId: string; batch: boolean; field: string }
 export interface TemplateProvider { id: string; kind: TemplateProviderKind; label: string; uses: TemplateUse[] }
 export interface TemplateMedia { id: string; name: string; content: ManagedMedia["content"] & { contentHash: string } }

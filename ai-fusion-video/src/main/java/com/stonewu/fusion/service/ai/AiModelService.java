@@ -9,8 +9,10 @@ import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.common.PageResult;
 import com.stonewu.fusion.controller.ai.vo.AiModelConnectivityRespVO;
 import com.stonewu.fusion.entity.ai.AiModel;
+import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.mapper.ai.AiModelMapper;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService;
+import com.stonewu.fusion.service.ai.model.AiModelMetadata;
 import com.stonewu.fusion.service.ai.model.AiModelMetadataResolver;
 import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +25,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
+import static com.stonewu.fusion.service.ai.AiModelMultimodalCapabilities.TRANSPORT_BASE64;
+import static com.stonewu.fusion.service.ai.AiModelMultimodalCapabilities.TYPE_IMAGE;
+import static com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign.MODEL_CODE;
+import static com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign.MODEL_TYPE;
+import static com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService.PLATFORM;
+import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
+
+/** 管理已登记的模型及模型调用配置。 */
 @Service
 @RequiredArgsConstructor
 public class AiModelService {
@@ -40,23 +50,26 @@ public class AiModelService {
 
     @Transactional
     public Long createAiModel(AiModel aiModel) {
-        validateApiConfig(aiModel.getApiConfigId(), true);
+        ApiConfig apiConfig = requireApiConfig(aiModel.getApiConfigId());
+        boolean makeDefault = Boolean.TRUE.equals(aiModel.getDefaultModel());
+        if (makeDefault) {
+            validateDefaultModel(aiModel.getStatus(), apiConfig);
+        }
         validateUniqueCode(null, aiModel.getApiConfigId(), aiModel.getCode());
         normalizeMetadata(aiModel);
-        validateRequestProtocol(aiModel);
-        validateCapabilityPreset(aiModel);
-        validateComfyUiBinding(aiModel);
+        validateModelConfiguration(aiModel);
         try {
             aiModelMapper.insert(aiModel);
         } catch (DuplicateKeyException e) {
             throwDuplicateCodeException(aiModel.getApiConfigId(), e);
         }
-        if (Boolean.TRUE.equals(aiModel.getDefaultModel())) {
+        if (makeDefault) {
             clearOtherDefaults(aiModel.getModelType(), aiModel.getId());
         }
         return aiModel.getId();
     }
 
+    /** 更新模型时，在默认归属变更前校验生效的模型状态和接入。 */
     @Transactional
     public void updateAiModel(Long id, String name, String code, String modelProtocol,
                               String capabilityPresetCode, Integer modelType, String icon,
@@ -70,9 +83,24 @@ public class AiModelService {
         if (model == null) {
             throw new BusinessException(404, "AI模型不存在");
         }
+        boolean changesType = modelType != null && !modelType.equals(model.getModelType());
+        if (changesType
+                && (Integer.valueOf(MODEL_TYPE).equals(modelType) || Integer.valueOf(MODEL_TYPE).equals(model.getModelType()))) {
+            throw new BusinessException(400, "参考音频模型不能与其他模型类型互相转换，请新建模型");
+        }
         Long nextApiConfigId = apiConfigId != null ? apiConfigId : model.getApiConfigId();
         String nextCode = code != null ? code : model.getCode();
-        validateApiConfig(apiConfigId, false);
+        boolean changesDefaultConfig = changesType
+                || (apiConfigId != null && !apiConfigId.equals(model.getApiConfigId()))
+                || (status != null && !status.equals(model.getStatus()));
+        boolean updateDefault = Boolean.TRUE.equals(defaultModel)
+                || (defaultModel == null && Boolean.TRUE.equals(model.getDefaultModel()) && changesDefaultConfig);
+        if (updateDefault) {
+            Integer nextStatus = status != null ? status : model.getStatus();
+            validateDefaultModel(nextStatus, requireApiConfig(nextApiConfigId));
+        } else if (apiConfigId != null) {
+            requireApiConfig(apiConfigId);
+        }
         validateUniqueCode(id, nextApiConfigId, nextCode);
         if (name != null) {
             model.setName(name);
@@ -132,15 +160,20 @@ public class AiModelService {
             model.setComfyuiWorkflowId(comfyuiWorkflowId > 0 ? comfyuiWorkflowId : null);
         }
         normalizeMetadata(model);
-        validateRequestProtocol(model);
-        validateCapabilityPreset(model);
-        validateComfyUiBinding(model);
+        validateModelConfiguration(model);
         try {
-            aiModelMapper.updateById(model);
+            // 实体更新会跳过 null，显式清空的字段通过同一条 SQL 持久化。
+            aiModelMapper.update(model, new LambdaUpdateWrapper<AiModel>()
+                    .eq(AiModel::getId, id)
+                    .set(modelProtocol != null && model.getModelProtocol() == null, AiModel::getModelProtocol, null)
+                    .set(capabilityPresetCode != null && model.getCapabilityPresetCode() == null,
+                            AiModel::getCapabilityPresetCode, null)
+                    .set(comfyuiWorkflowId != null && model.getComfyuiWorkflowId() == null,
+                            AiModel::getComfyuiWorkflowId, null));
         } catch (DuplicateKeyException e) {
             throwDuplicateCodeException(nextApiConfigId, e);
         }
-        if (Boolean.TRUE.equals(model.getDefaultModel())) {
+        if (updateDefault) {
             clearOtherDefaults(model.getModelType(), model.getId());
         }
         chatModelFactory.evict(id);
@@ -182,10 +215,20 @@ public class AiModelService {
         return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>().eq(AiModel::getStatus, 1));
     }
 
+    /** 查询当前环境可选择的已启用模型。 */
     public List<AiModel> getListByType(Integer modelType) {
-        return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
+        var models = aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
                 .eq(AiModel::getStatus, 1)
                 .eq(AiModel::getModelType, modelType));
+        if (!Integer.valueOf(MODEL_TYPE_TEXT).equals(modelType) || models.isEmpty()
+                || apiConfigService.isLocalCodexAvailable()) {
+            return models;
+        }
+        var codexApiIds = apiConfigService.getIdsByPlatform(CODEX);
+        return models.stream()
+                .filter(model -> !CODEX.equals(model.getModelProtocol())
+                        && (model.getApiConfigId() == null || !codexApiIds.contains(model.getApiConfigId())))
+                .toList();
     }
 
     public AiModel getDefaultByType(Integer modelType) {
@@ -194,6 +237,13 @@ public class AiModelService {
                 .eq(AiModel::getModelType, modelType)
                 .eq(AiModel::getStatus, 1)
                 .orderByAsc(AiModel::getSort)).getRecords().stream().findFirst().orElse(null);
+    }
+
+    /** 助手及恢复的智能体运行校验所选模型能否承担对话。 */
+    public void requireAgentModel(AiModel model) {
+        if (Integer.valueOf(MODEL_TYPE).equals(model.getModelType())) {
+            throw new BusinessException(400, "参考音频模型仅用于画布生成参考音频节点");
+        }
     }
 
     public AiModelConnectivityRespVO testTextModelConnectivity(Long id) {
@@ -225,15 +275,24 @@ public class AiModelService {
         }
     }
 
-    private void validateApiConfig(Long apiConfigId, boolean required) {
+    private ApiConfig requireApiConfig(Long apiConfigId) {
         if (apiConfigId == null) {
-            if (required) {
-                throw new BusinessException(400, "请选择 API 配置");
-            }
-            return;
+            throw new BusinessException(400, "请选择 API 配置");
         }
-        if (apiConfigService.getById(apiConfigId) == null) {
+        ApiConfig apiConfig = apiConfigService.getById(apiConfigId);
+        if (apiConfig == null) {
             throw new BusinessException(404, "API 配置不存在");
+        }
+        return apiConfig;
+    }
+
+    /** 默认模型必须使用已启用的模型和接入，校验通过才可替换旧默认项。 */
+    private void validateDefaultModel(Integer modelStatus, ApiConfig apiConfig) {
+        if (!Integer.valueOf(1).equals(modelStatus)) {
+            throw new BusinessException(400, "模型未启用，不能设为默认模型");
+        }
+        if (!Integer.valueOf(1).equals(apiConfig.getStatus())) {
+            throw new BusinessException(400, "API 配置未启用，不能设为默认模型");
         }
     }
 
@@ -291,6 +350,34 @@ public class AiModelService {
         return StrUtil.isBlank(code) ? null : code.trim();
     }
 
+    /** 音色模型运行内置工作流，其余模型沿用请求协议和工作流绑定校验。 */
+    private void validateModelConfiguration(AiModel model) {
+        if (Integer.valueOf(MODEL_TYPE).equals(model.getModelType())) {
+            validateVoiceModel(model);
+            return;
+        }
+        validateRequestProtocol(model);
+        validateCapabilityPreset(model);
+        validateComfyUiBinding(model);
+    }
+
+    /** 校验唯一支持的 Qwen 音色设计模型及其 ComfyUI 服务绑定。 */
+    private void validateVoiceModel(AiModel model) {
+        var api = aiModelMetadataResolver.resolveApiConfig(model);
+        if (api == null || !Integer.valueOf(1).equals(api.getStatus()) || !PLATFORM.equals(api.getPlatform())) {
+            throw new BusinessException(400, "参考音频模型必须绑定已启用的 ComfyUI API 配置");
+        }
+        if (!PLATFORM.equals(model.getModelProtocol())) {
+            throw new BusinessException(400, "参考音频模型的请求协议必须为 comfyui");
+        }
+        if (!MODEL_CODE.equals(model.getCode())) {
+            throw new BusinessException(400, "参考音频模型标识必须为 " + MODEL_CODE);
+        }
+        if (model.getComfyuiWorkflowId() != null || model.getCapabilityPresetCode() != null) {
+            throw new BusinessException(400, "参考音频模型使用内置音色工作流，不能绑定工作流或能力预设");
+        }
+    }
+
     private void validateCapabilityPreset(AiModel model) {
         if (model == null || StrUtil.isBlank(model.getCapabilityPresetCode())) {
             return;
@@ -318,10 +405,13 @@ public class AiModelService {
         }
         var apiConfig = aiModelMetadataResolver.resolveApiConfig(model);
         apiConfigService.validateModelType(apiConfig, model.getModelType());
+        var metadata = aiModelMetadataResolver.resolve(model, apiConfig);
+        if (metadata.usesLocalCodex()) {
+            validateCodexModel(model, metadata);
+        }
         if (model.getModelType() < 1 || model.getModelType() > 3) {
             return;
         }
-        var metadata = aiModelMetadataResolver.resolve(model, apiConfig);
         if (StrUtil.isBlank(metadata.modelProtocol()) || "generic".equals(metadata.modelProtocol())) {
             String capability = switch (model.getModelType()) {
                 case 1 -> "文本";
@@ -331,6 +421,20 @@ public class AiModelService {
             };
             throw new BusinessException(400, capability
                     + "模型未配置有效请求协议：请在模型中设置覆盖协议，或在 API 配置中设置对应的默认协议");
+        }
+    }
+
+    /** 校验本机 Codex 的模型类型和图片输入协议。 */
+    private void validateCodexModel(AiModel model, AiModelMetadata metadata) {
+        apiConfigService.requireLocalCodex();
+        if (!Integer.valueOf(MODEL_TYPE_TEXT).equals(model.getModelType())
+                || !CODEX.equals(metadata.normalizedPlatform()) || !CODEX.equals(metadata.modelProtocol())) {
+            throw new BusinessException(400, "Codex 接入必须绑定使用 Codex 协议的文本模型");
+        }
+        var inputTypes = model.getMultimodalInputTypes();
+        if (!inputTypes.isEmpty() && (!List.of(TYPE_IMAGE).equals(inputTypes)
+                || !List.of(TRANSPORT_BASE64).equals(model.getMultimodalInputTransports().get(TYPE_IMAGE)))) {
+            throw new BusinessException(400, "Codex 仅支持 Base64 图片输入");
         }
     }
 

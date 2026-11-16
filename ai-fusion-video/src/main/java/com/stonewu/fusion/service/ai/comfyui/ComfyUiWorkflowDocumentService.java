@@ -44,6 +44,7 @@ public class ComfyUiWorkflowDocumentService {
 
     private final ObjectMapper objectMapper;
 
+    /** 校验 API 工作流文档及其输入输出合同，并冻结为可版本化的定义。 */
     public ComfyUiWorkflowDefinition normalize(int modelType,
                                                String uiWorkflowJson,
                                                String apiWorkflowJson,
@@ -71,6 +72,17 @@ public class ComfyUiWorkflowDocumentService {
                 modelType, apiWorkflow, inputBindingsNode);
         List<ComfyUiOutputBinding> outputBindings = validateOutputBindings(
                 modelType, apiWorkflow, outputBindingsNode);
+        if (ComfyUiH3RefProfile.validateExplicit(apiWorkflow)) {
+            if (modelType != 3 || !inputBindings.isEmpty()) {
+                throw invalid("H3 REF 工作流须使用视频类型及内置动态输入，无需配置固定输入绑定");
+            }
+            if (outputBindings.stream().filter(binding -> "primary".equals(binding.role())).anyMatch(
+                    binding -> !"168".equals(binding.nodeId()) || !"video".equals(binding.mediaType()))) {
+                throw invalid("H3 REF 的主结果须绑定为节点 168 的视频");
+            }
+        } else if (modelType == 3 && inputBindings.isEmpty()) {
+            ComfyUiH3RefProfile.markFixedBindings(apiWorkflow);
+        }
 
         String canonicalApi = writeCanonical(apiWorkflow);
         String canonicalInputs = writeCanonical(inputBindingsNode);

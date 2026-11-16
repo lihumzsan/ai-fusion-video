@@ -1,5 +1,6 @@
 package com.stonewu.fusion.service.ai.run.model;
 
+import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stonewu.fusion.common.BusinessException;
@@ -90,7 +91,7 @@ public class AgentModelRequests {
             }
         }
         var currentModel = models.selectById(model.getId());
-        if (currentModel != null && model.getConfig() != null) {
+        if (currentModel != null && StrUtil.isNotBlank(model.getConfig())) {
             currentModel = AiModelRequestOptions.withReasoningEffort(currentModel,
                     AiModelRequestOptions.reasoningEffort(json.read(model.getConfig(), JsonNode.class)), mapper);
         }

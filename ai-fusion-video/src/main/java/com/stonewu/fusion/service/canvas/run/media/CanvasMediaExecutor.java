@@ -8,26 +8,29 @@ import com.stonewu.fusion.service.media.job.MediaJobRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.EnumSet;
 import java.util.Set;
 
 import static com.stonewu.fusion.service.canvas.run.CanvasRunData.*;
 import static com.stonewu.fusion.service.canvas.run.CanvasRunExecutors.Outcome;
 
+/** 将画布媒体节点交给独立媒体任务并映射运行状态。 */
 @Component
 @RequiredArgsConstructor
 public class CanvasMediaExecutor implements CanvasRunExecutors.Executor {
     public static final Set<CanvasNodeKind> LOCAL = Set.of(CanvasNodeKind.FRAME_EXTRACT, CanvasNodeKind.IMAGE_TRANSFORM,
             CanvasNodeKind.VIDEO_COMPOSE, CanvasNodeKind.AUDIO_MIX);
     public static final Set<CanvasNodeKind> AUDIO = Set.of(CanvasNodeKind.MUSIC_GENERATION,
-            CanvasNodeKind.SFX_GENERATION);
+            CanvasNodeKind.SFX_GENERATION, CanvasNodeKind.VOICE_GENERATION);
     private final CanvasMediaJobs tasks;
     private final MediaJobRepository jobs;
     private final CanvasJson json;
 
     @Override
     public Set<CanvasNodeKind> kinds() {
-        return Set.of(CanvasNodeKind.FRAME_EXTRACT, CanvasNodeKind.IMAGE_TRANSFORM, CanvasNodeKind.VIDEO_COMPOSE,
-                CanvasNodeKind.AUDIO_MIX, CanvasNodeKind.MUSIC_GENERATION, CanvasNodeKind.SFX_GENERATION);
+        var kinds = EnumSet.copyOf(LOCAL);
+        kinds.addAll(AUDIO);
+        return kinds;
     }
 
     @Override

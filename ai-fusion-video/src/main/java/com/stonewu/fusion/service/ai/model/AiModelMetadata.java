@@ -8,4 +8,9 @@ public record AiModelMetadata(
         String normalizedPlatform,
         String modelProtocol
 ) {
+    public static final String CODEX = "codex";
+
+    public boolean usesLocalCodex() {
+        return CODEX.equals(normalizedPlatform) || CODEX.equals(modelProtocol);
+    }
 }

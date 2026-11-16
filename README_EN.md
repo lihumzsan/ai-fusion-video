@@ -149,6 +149,12 @@ Connect a ComfyUI instance under Settings → AI Configuration. Import the workf
 
 Select that model in the generation tools or on the canvas to run the workflow. The form shows which inputs you need and how many reference images it accepts.
 
+For MiniMax H3 REF, create a video workflow and choose **Import H3 REF workflow**. Each run takes 1–9 reference images and up to 3 MP3 or WAV reference clips. Each clip must be at least 2 seconds, and the total can be at most 15 seconds. Use tags such as `<Picture 1>` and `<Audio 1>` in the prompt to refer to inputs in order. After testing and publishing the workflow, add a ComfyUI node to the canvas, choose video output, and select the model linked to the workflow.
+
+Under Settings → AI Configuration, add Qwen3-TTS VoiceDesign 1.7B as an audio generation model to your ComfyUI connection. Add **Generate Reference Audio** to the canvas, select the model, and enter a voice description, sample dialogue, and language. Connect its audio output to the H3 node’s reference audio input. The sample dialogue demonstrates the voice. Enter the video’s dialogue in the H3 prompt. Existing reference audio nodes can keep their ComfyUI connection or switch to a model.
+
+The built-in Qwen3-TTS VoiceDesign workflow requires [ComfyUI-Qwen-TTS](https://github.com/flybirdxx/ComfyUI-Qwen-TTS) and the [Qwen3-TTS 1.7B VoiceDesign model](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign) on the ComfyUI server. The application server uses FFmpeg to convert the native SaveAudio FLAC output to WAV.
+
 ### Other features
 
 | Area | What you can do |
@@ -166,6 +172,10 @@ Select that model in the generation tools or on the canvas to run the workflow. 
 Manage models and API connections centrally from Settings without writing secrets into the source code. Chat and Agents support OpenAI-compatible APIs, Anthropic, Gemini, DashScope, Ollama, and other model services. Image and video generation can connect to multiple services, with models selected in projects according to their capabilities.
 
 Model availability depends on your provider account, endpoint, and permissions.
+
+For local development, use Local Codex for assistant conversations, script parsing, storyboarding, and canvas text tasks. Run the Java backend and the Codex CLI as the same OS user and sign in with `codex login`. Under **Settings → AI Configuration**, add Local Codex and enter a model ID available to your account. Select it where a model picker appears, or set it as the default for text tasks without a model selection. No API URL or API key is required.
+
+If the Java process cannot find `codex` on its `PATH`, set `FUSION_CODEX_EXECUTABLE` to the full path to the CLI. Inference uses your ChatGPT account's Codex service.
 
 ### Storage
 
@@ -261,7 +271,7 @@ Separate frontend and backend deployment leaves the repository's built-in Nginx 
 ### Requirements
 
 - JDK 21
-- Node.js 20 and pnpm 10
+- Node.js 22.13 or newer, with the pnpm version specified in `ai-fusion-video-web/package.json`
 - Docker for local MySQL and Redis
 - FFmpeg and FFprobe for video composition and media inspection
 
@@ -270,7 +280,7 @@ Separate frontend and backend deployment leaves the repository's built-in Nginx 
 ```bash
 cd ai-fusion-video
 docker compose -f docker-compose-middleware.yml up -d
-./mvnw spring-boot:run
+sh ./mvnw spring-boot:run
 ```
 
 Windows users can run `.\mvnw.cmd spring-boot:run`.

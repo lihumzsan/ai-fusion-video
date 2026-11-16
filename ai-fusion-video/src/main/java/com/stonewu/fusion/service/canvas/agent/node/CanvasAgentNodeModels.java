@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
+/** 冻结专业节点可执行的模型、工具和业务规格。 */
 @Component
 @RequiredArgsConstructor
 public class CanvasAgentNodeModels {
@@ -32,6 +33,7 @@ public class CanvasAgentNodeModels {
     private final AgentKernelSkills skills;
     private final CanvasJson json;
 
+    /** 固定专业智能体可用的模型，排除仅适用于单次画布文本调用的接入。 */
     public ObjectNode freeze(CanvasNode node, CanvasActor actor) {
         CanvasAgentNodeContracts.configuration(node);
         String type = CanvasAgentNodeTypes.type(node);
@@ -42,7 +44,9 @@ public class CanvasAgentNodeModels {
         if (definition == null) {
             throw CanvasRunException.invalid("专业智能体定义不可用");
         }
-        var result = textModels.freeze(node.config().path("modelId").asLong());
+        long modelId = node.config().path("modelId").asLong();
+        CanvasModelCatalog.requireAgentModel(catalog.require(modelId));
+        var result = textModels.freeze(modelId);
         int maximum = node.config().path("maxAgentRuns").asInt(16);
         if (maximum < 1 || maximum > 64) {
             throw CanvasRunException.invalid("每个专业节点最多允许 1 至 64 个智能体任务（含主任务）");

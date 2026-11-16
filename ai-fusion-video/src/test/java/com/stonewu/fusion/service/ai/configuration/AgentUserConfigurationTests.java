@@ -165,7 +165,10 @@ class AgentUserConfigurationTests {
         var text = mock(CanvasTextModels.class);
         when(text.freeze(9L)).thenAnswer(call -> mapper.createObjectNode().put("modelId", 9));
         var skills = new AgentKernelSkills(new AgentSkillSelection(mock(AgentScopeSkillRegistry.class), userSkills), agents, mapper);
-        var models = new CanvasAgentNodeModels(text, mock(GenerationModelSnapshot.class), mock(CanvasModelCatalog.class), agents, skills, new CanvasJson(mapper));
+        var catalog = mock(CanvasModelCatalog.class);
+        when(catalog.require(9L)).thenReturn(new CanvasModelCatalog.Option(9L, "模型", "text", "text", Map.of(),
+                Map.of(), List.of(), null));
+        var models = new CanvasAgentNodeModels(text, mock(GenerationModelSnapshot.class), catalog, agents, skills, new CanvasJson(mapper));
         var config = mapper.createObjectNode().put("agentType", "concept_visualizer").put("modelId", 9).put("inputType", "text").put("resultType", "text");
         var node = new CanvasNode("node", CanvasNodeKind.AGENT, 1, "构思", null, config, null, 0, 0);
         saved.put("42:concept_visualizer", "{\"defaultSkills\":[\"chosen\"]}");

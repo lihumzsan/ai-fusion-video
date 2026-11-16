@@ -30,6 +30,9 @@ public class ComfyUiWorkflowRenderer {
             throw new BusinessException(400, "ComfyUI 工作流版本不能为空");
         }
         ObjectNode workflow = documentService.parseApiWorkflow(version.getApiWorkflowJson()).deepCopy();
+        if (modelType == 3 && ComfyUiH3RefProfile.matches(version, workflow)) {
+            return ComfyUiH3RefProfile.render(workflow, values);
+        }
         List<ComfyUiInputBinding> bindings = documentService.parseInputBindings(
                 modelType, version.getApiWorkflowJson(), version.getInputBindingsJson());
         Map<String, JsonNode> writtenInputs = new HashMap<>();

@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -30,7 +31,7 @@ class InfistarModelDiscoveryTests {
     @BeforeEach
     void start() throws Exception {
         presets.init();
-        provider = new ProviderCatalogService(new ObjectMapper()).require("infistar");
+        provider = new ProviderCatalogService(new ObjectMapper(), new MockEnvironment()).require("infistar");
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             headers.add(exchange.getRequestHeaders().getFirst("Authorization"));
