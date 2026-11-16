@@ -21,7 +21,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -85,20 +86,23 @@ class TrackedAgentStreamingTests {
         var disconnected = new HttpTransportException("Connection reset after HTTP status 500 was mentioned in content");
         try (var tracked = tracked(Flux.concat(Flux.just(text("半段内容")), Flux.error(disconnected)))) {
             StepVerifier.create(tracked.stream(List.of(), List.of(), null)).expectNextCount(1)
-                    .expectErrorMatches(error -> error == disconnected).verify(Duration.ofSeconds(3));
+                    .expectErrorSatisfies(error -> {
+                        assertThat(error).isInstanceOf(AgentModelCallFailure.class).hasCause(disconnected);
+                        assertThat(((AgentModelCallFailure) error).retryable()).isTrue();
+                    }).verify(Duration.ofSeconds(3));
             verify(ledger).uncertain(claim, false);
             verify(ledger, never()).failed(any());
         }
     }
 
     @Test
-    void cancellingAfterTheFirstChunkCancelsTheProviderAndRecordsTheOriginalRequest() {
-        AtomicBoolean cancelled = new AtomicBoolean();
+    void cancellingAfterTheFirstChunkCancelsTheProviderAndRecordsTheOriginalRequest() throws InterruptedException {
+        var cancelled = new CountDownLatch(1);
         try (var tracked = tracked(Flux.concat(Flux.just(text("已到达")), Flux.<ChatResponse>never())
-                .doOnCancel(() -> cancelled.set(true)))) {
+                .doOnCancel(cancelled::countDown))) {
             StepVerifier.create(tracked.stream(List.of(), List.of(), null))
                     .expectNextCount(1).thenCancel().verify(Duration.ofSeconds(3));
-            assertThat(cancelled).isTrue();
+            assertThat(cancelled.await(2, TimeUnit.SECONDS)).isTrue();
             verify(ledger, timeout(2000)).uncertain(claim, true);
         }
     }

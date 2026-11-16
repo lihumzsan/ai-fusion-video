@@ -9,8 +9,9 @@ import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.mapper.ai.AiModelMapper;
 import com.stonewu.fusion.mapper.ai.ApiConfigMapper;
-import com.stonewu.fusion.service.ai.proxy.AiProxySupport;
 import com.stonewu.fusion.service.ai.catalog.ProviderCatalogService;
+import com.stonewu.fusion.service.ai.provider.VertexAiAuthentication;
+import com.stonewu.fusion.service.ai.proxy.AiProxySupport;
 import com.stonewu.fusion.service.ai.sonilo.SoniloAudioClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -137,6 +138,9 @@ public class ApiConfigService {
         applyPlatformDefaults(config);
         normalizeProviderBinding(config);
         normalizeProxyConfig(config);
+        for (var model : aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>().eq(AiModel::getApiConfigId, id))) {
+            providerCatalog.validateProtocol(config, model.getModelProtocol());
+        }
         apiConfigMapper.updateById(config);
         evictModelCaches();
     }
@@ -165,10 +169,17 @@ public class ApiConfigService {
     }
 
     public void validateModelType(ApiConfig config, Integer modelType) {
+        if (modelType == null || modelType < 1 || modelType > 4) {
+            throw new BusinessException(400, "请选择文字、图像、视频或音频生成类型");
+        }
         if (config != null && config.getProviderId() != null
                 && !providerCatalog.require(config.getProviderId()).supportedModelTypes().contains(modelType)) {
             throw new BusinessException(400, "当前提供商不支持所选模型类型");
         }
+    }
+
+    public void validateModelProtocol(ApiConfig config, String protocol) {
+        providerCatalog.validateProtocol(config, protocol);
     }
 
     public PageResult<ApiConfig> getPage(String name, String platform, Integer status, int pageNo, int pageSize) {
@@ -323,6 +334,11 @@ public class ApiConfigService {
             config.setAutoAppendV1Path(false);
             return;
         }
+        if (VertexAiAuthentication.usesApiKey(config)) {
+            config.setApiKey(VertexAiAuthentication.requireApiKey(config));
+            config.setAutoAppendV1Path(false);
+            return;
+        }
         if (SoniloAudioClient.PLATFORM.equalsIgnoreCase(config.getPlatform())) {
             SoniloAudioClient.requireApiKey(config);
             // 音频生成接入：只有地址与密钥，不参与文本 / 图片 / 视频协议路由
@@ -373,5 +389,8 @@ public class ApiConfigService {
     private void normalizeProviderBinding(ApiConfig config) {
         config.setProviderId(StrUtil.isBlank(config.getProviderId()) ? null : config.getProviderId().trim());
         providerCatalog.validateBinding(config);
+        providerCatalog.validateProtocol(config, config.getTextProtocol());
+        providerCatalog.validateProtocol(config, config.getImageProtocol());
+        providerCatalog.validateProtocol(config, config.getVideoProtocol());
     }
 }

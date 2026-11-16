@@ -1,5 +1,6 @@
 package com.stonewu.fusion.service.generation.job;
 
+import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.stonewu.fusion.entity.ai.ApiConfig;
@@ -10,6 +11,7 @@ import com.stonewu.fusion.service.canvas.CanvasJson;
 import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
 import com.stonewu.fusion.service.generation.ReferenceImageTransportService;
 import com.stonewu.fusion.service.media.MediaInputTransport;
+import com.stonewu.fusion.service.media.MediaIntakeService;
 import com.stonewu.fusion.service.media.MediaReference;
 import com.stonewu.fusion.service.media.model.MediaKind;
 import lombok.RequiredArgsConstructor;
@@ -39,14 +41,15 @@ public class GenerationProviderInputs {
         if (resolveMedia) {
             versions.validate(task.getInputMediaVersions(), submission.context().actor());
             capabilities.validateImageTask(submission.model(), task);
+            var modelConfig = capabilities.getMergedModelConfig(submission.model());
             var values = references.parseJsonInputs(task.getRefImageUrls(), "refImageUrls");
             if (!values.isEmpty()) {
                 task.setRefImageUrls(JSONUtil.toJsonStr(references.resolveInputs(submission.model(),
-                        capabilities.getMergedModelConfig(submission.model()), values, api,
+                        modelConfig, values, api,
                         submission.context().actor(),
                         job.claim())));
             }
-            task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, api, job.claim(), false));
+            task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, modelConfig, api, job.claim(), false));
         }
         return task;
     }
@@ -67,34 +70,33 @@ public class GenerationProviderInputs {
         versions.validateVideoMedia(task, modelConfig, submission.context().actor());
         if (task.getFirstFrameImageUrl() != null) {
             task.setFirstFrameImageUrl(
-                    images(List.of(task.getFirstFrameImageUrl()), submission, api, job.claim()).getFirst());
+                    images(List.of(task.getFirstFrameImageUrl()), submission, modelConfig, api, job.claim()).getFirst());
         }
         if (task.getLastFrameImageUrl() != null) {
             task.setLastFrameImageUrl(
-                    images(List.of(task.getLastFrameImageUrl()), submission, api, job.claim()).getFirst());
+                    images(List.of(task.getLastFrameImageUrl()), submission, modelConfig, api, job.claim()).getFirst());
         }
         var refs = references.parseJsonInputs(task.getReferenceImageUrls(), "referenceImageUrls");
         if (!refs.isEmpty()) {
-            task.setReferenceImageUrls(JSONUtil.toJsonStr(images(refs, submission, api, job.claim())));
+            task.setReferenceImageUrls(JSONUtil.toJsonStr(images(refs, submission, modelConfig, api, job.claim())));
         }
         task.setReferenceVideoUrls(
                 mediaList(task.getReferenceVideoUrls(), "referenceVideoUrls", MediaKind.VIDEO, submission,
-                        job.claim(), false));
+                        modelConfig, job.claim(), false));
         task.setReferenceAudioUrls(
                 mediaList(task.getReferenceAudioUrls(), "referenceAudioUrls", MediaKind.AUDIO, submission,
-                        job.claim(), h3));
-        task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, api, job.claim(), h3));
+                        modelConfig, job.claim(), h3));
+        task.setWorkflowInputs(workflow(task.getWorkflowInputs(), submission, modelConfig, api, job.claim(), h3));
         return task;
     }
 
-    private List<String> images(List<String> input, GenerationSubmission submission, ApiConfig api,
-                                RemoteGenerationJob.Claim claim) {
-        return references.resolveInputs(submission.model(), capabilities.getMergedModelConfig(submission.model()),
-                input, api, submission.context().actor(), claim);
+    private List<String> images(List<String> input, GenerationSubmission submission, JSONObject modelConfig,
+                                ApiConfig api, RemoteGenerationJob.Claim claim) {
+        return references.resolveInputs(submission.model(), modelConfig, input, api, submission.context().actor(), claim);
     }
 
-    private ObjectNode workflow(ObjectNode raw, GenerationSubmission submission, ApiConfig api,
-                                RemoteGenerationJob.Claim claim, boolean h3) {
+    private ObjectNode workflow(ObjectNode raw, GenerationSubmission submission, JSONObject modelConfig,
+                                ApiConfig api, RemoteGenerationJob.Claim claim, boolean h3) {
         if (raw == null) {
             return null;
         }
@@ -105,7 +107,7 @@ public class GenerationProviderInputs {
         }
         for (String port : List.of("firstFrame", "lastFrame")) {
             if (raw.hasNonNull(port)) {
-                result.put(port, images(List.of(raw.path(port).asText()), submission, api, claim).getFirst());
+                result.put(port, images(List.of(raw.path(port).asText()), submission, modelConfig, api, claim).getFirst());
             }
         }
         for (String port : List.of("referenceImages", "referenceVideos", "referenceAudios")) {
@@ -115,9 +117,9 @@ public class GenerationProviderInputs {
             List<String> values = new ArrayList<>();
             raw.path(port).forEach(value -> values.add(value.asText()));
             List<String> resolved = switch (port) {
-                case "referenceImages" -> images(values, submission, api, claim);
-                case "referenceVideos" -> resolveMedia(values, MediaKind.VIDEO, submission, claim, false);
-                default -> resolveMedia(values, MediaKind.AUDIO, submission, claim, false);
+                case "referenceImages" -> images(values, submission, modelConfig, api, claim);
+                case "referenceVideos" -> resolveMedia(values, MediaKind.VIDEO, submission, modelConfig, claim, false);
+                default -> resolveMedia(values, MediaKind.AUDIO, submission, modelConfig, claim, false);
             };
             var output = result.putArray(port);
             resolved.forEach(output::add);
@@ -126,21 +128,27 @@ public class GenerationProviderInputs {
     }
 
     private String mediaList(String input, String field, MediaKind kind, GenerationSubmission submission,
-                             RemoteGenerationJob.Claim claim, boolean h3Audio) {
+                             JSONObject modelConfig, RemoteGenerationJob.Claim claim, boolean h3Audio) {
         if (input == null || input.isBlank()) {
             return input;
         }
-        return JSONUtil.toJsonStr(resolveMedia(references.parseJsonInputs(input, field), kind, submission, claim,
-                h3Audio));
+        return JSONUtil.toJsonStr(resolveMedia(references.parseJsonInputs(input, field), kind, submission,
+                modelConfig, claim, h3Audio));
     }
 
     /** 本机 ComfyUI 的 H3 以文件上传接收音频，生成工作者只读取已授权的托管音频。 */
     private List<String> resolveMedia(List<String> values, MediaKind kind, GenerationSubmission submission,
-                                      RemoteGenerationJob.Claim claim, boolean h3Audio) {
+                                      JSONObject modelConfig, RemoteGenerationJob.Claim claim, boolean h3Audio) {
         var actor = submission.context().actor();
         if (h3Audio) {
             return values.stream().map(value -> media.dataUri(value, actor, MediaKind.AUDIO,
                     ComfyUiInputResourceService.MAX_H3_REFERENCE_AUDIO_BYTES)).toList();
+        }
+        var formats = modelConfig.getJSONArray(kind == MediaKind.VIDEO
+                ? "referenceVideoInputFormats" : "referenceAudioInputFormats");
+        if (formats != null && formats.contains("data_uri")) {
+            return values.stream().map(value -> MediaReference.managed(value)
+                    ? media.dataUri(value, actor, kind, MediaIntakeService.MAX_UPLOAD_BYTES) : value).toList();
         }
         return values.stream().map(value -> MediaReference.managed(value) ? media.generationUrl(value, actor, kind,
                 claim) : value).toList();

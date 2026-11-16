@@ -11,7 +11,9 @@ import com.stonewu.fusion.controller.ai.vo.AiModelConnectivityRespVO;
 import com.stonewu.fusion.entity.ai.AiModel;
 import com.stonewu.fusion.entity.ai.ApiConfig;
 import com.stonewu.fusion.mapper.ai.AiModelMapper;
+import com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign;
 import com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService;
+import com.stonewu.fusion.service.ai.google.GoogleModelFamily;
 import com.stonewu.fusion.service.ai.model.AiModelMetadata;
 import com.stonewu.fusion.service.ai.model.AiModelMetadataResolver;
 import com.stonewu.fusion.service.generation.GenerationModelCapabilityService;
@@ -24,11 +26,11 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static com.stonewu.fusion.service.ai.AiModelMultimodalCapabilities.TRANSPORT_BASE64;
 import static com.stonewu.fusion.service.ai.AiModelMultimodalCapabilities.TYPE_IMAGE;
 import static com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign.MODEL_CODE;
-import static com.stonewu.fusion.service.ai.comfyui.ComfyUiVoiceDesign.MODEL_TYPE;
 import static com.stonewu.fusion.service.ai.comfyui.ComfyUiWorkflowService.PLATFORM;
 import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
 
@@ -38,6 +40,7 @@ import static com.stonewu.fusion.service.ai.model.AiModelMetadata.CODEX;
 public class AiModelService {
 
     private static final int MODEL_TYPE_TEXT = 1;
+    private static final int MODEL_TYPE_AUDIO = 4;
     private static final String CONNECTIVITY_TEST_MESSAGE = "Connectivity test. Reply with OK only.";
 
     private final AiModelMapper aiModelMapper;
@@ -56,8 +59,7 @@ public class AiModelService {
             validateDefaultModel(aiModel.getStatus(), apiConfig);
         }
         validateUniqueCode(null, aiModel.getApiConfigId(), aiModel.getCode());
-        normalizeMetadata(aiModel);
-        validateModelConfiguration(aiModel);
+        prepareModelConfiguration(aiModel, apiConfig);
         try {
             aiModelMapper.insert(aiModel);
         } catch (DuplicateKeyException e) {
@@ -84,10 +86,6 @@ public class AiModelService {
             throw new BusinessException(404, "AI模型不存在");
         }
         boolean changesType = modelType != null && !modelType.equals(model.getModelType());
-        if (changesType
-                && (Integer.valueOf(MODEL_TYPE).equals(modelType) || Integer.valueOf(MODEL_TYPE).equals(model.getModelType()))) {
-            throw new BusinessException(400, "参考音频模型不能与其他模型类型互相转换，请新建模型");
-        }
         Long nextApiConfigId = apiConfigId != null ? apiConfigId : model.getApiConfigId();
         String nextCode = code != null ? code : model.getCode();
         boolean changesDefaultConfig = changesType
@@ -95,11 +93,20 @@ public class AiModelService {
                 || (status != null && !status.equals(model.getStatus()));
         boolean updateDefault = Boolean.TRUE.equals(defaultModel)
                 || (defaultModel == null && Boolean.TRUE.equals(model.getDefaultModel()) && changesDefaultConfig);
+        ApiConfig nextApi = updateDefault || apiConfigId != null
+                ? requireApiConfig(nextApiConfigId) : aiModelMetadataResolver.resolveApiConfig(model);
         if (updateDefault) {
             Integer nextStatus = status != null ? status : model.getStatus();
-            validateDefaultModel(nextStatus, requireApiConfig(nextApiConfigId));
-        } else if (apiConfigId != null) {
-            requireApiConfig(apiConfigId);
+            validateDefaultModel(nextStatus, nextApi);
+        }
+        String nextProtocol = modelProtocol != null ? aiModelMetadataResolver.normalizeProtocol(modelProtocol)
+                : model.getModelProtocol();
+        Integer nextModelType = modelType != null ? modelType : model.getModelType();
+        ApiConfig existingApi = Objects.equals(nextApiConfigId, model.getApiConfigId()) ? nextApi : null;
+        boolean currentVoiceDesign = ComfyUiVoiceDesign.isModelCandidate(
+                model.getModelType(), model.getCode(), model.getModelProtocol(), existingApi);
+        if (currentVoiceDesign != ComfyUiVoiceDesign.isModelCandidate(nextModelType, nextCode, nextProtocol, nextApi)) {
+            throw new BusinessException(400, "参考音频模型不能与其他模型类型互相转换，请新建模型");
         }
         validateUniqueCode(id, nextApiConfigId, nextCode);
         if (name != null) {
@@ -109,7 +116,7 @@ public class AiModelService {
             model.setCode(code);
         }
         if (modelProtocol != null) {
-            model.setModelProtocol(aiModelMetadataResolver.normalizeProtocol(modelProtocol));
+            model.setModelProtocol(nextProtocol);
         }
         if (capabilityPresetCode != null) {
             model.setCapabilityPresetCode(normalizeCapabilityPresetCode(capabilityPresetCode));
@@ -159,13 +166,11 @@ public class AiModelService {
         if (comfyuiWorkflowId != null) {
             model.setComfyuiWorkflowId(comfyuiWorkflowId > 0 ? comfyuiWorkflowId : null);
         }
-        normalizeMetadata(model);
-        validateModelConfiguration(model);
+        prepareModelConfiguration(model, nextApi);
         try {
-            // 实体更新会跳过 null，显式清空的字段通过同一条 SQL 持久化。
+            // 请求协议由实体映射写入；其余显式清空的字段通过同一条 SQL 持久化。
             aiModelMapper.update(model, new LambdaUpdateWrapper<AiModel>()
                     .eq(AiModel::getId, id)
-                    .set(modelProtocol != null && model.getModelProtocol() == null, AiModel::getModelProtocol, null)
                     .set(capabilityPresetCode != null && model.getCapabilityPresetCode() == null,
                             AiModel::getCapabilityPresetCode, null)
                     .set(comfyuiWorkflowId != null && model.getComfyuiWorkflowId() == null,
@@ -241,8 +246,11 @@ public class AiModelService {
 
     /** 助手及恢复的智能体运行校验所选模型能否承担对话。 */
     public void requireAgentModel(AiModel model) {
-        if (Integer.valueOf(MODEL_TYPE).equals(model.getModelType())) {
+        if (ComfyUiVoiceDesign.isModelCandidate(model.getModelType(), model.getCode(), model.getModelProtocol(), null)) {
             throw new BusinessException(400, "参考音频模型仅用于画布生成参考音频节点");
+        }
+        if (Integer.valueOf(MODEL_TYPE_AUDIO).equals(model.getModelType())) {
+            throw new BusinessException(400, "音频生成模型不能用于助手对话");
         }
     }
 
@@ -350,20 +358,21 @@ public class AiModelService {
         return StrUtil.isBlank(code) ? null : code.trim();
     }
 
-    /** 音色模型运行内置工作流，其余模型沿用请求协议和工作流绑定校验。 */
-    private void validateModelConfiguration(AiModel model) {
-        if (Integer.valueOf(MODEL_TYPE).equals(model.getModelType())) {
-            validateVoiceModel(model);
+    /** ComfyUI 音色设计与各渠道的音频生成共用模型类型，只有前者使用内置工作流。 */
+    private void prepareModelConfiguration(AiModel model, ApiConfig apiConfig) {
+        apiConfigService.validateModelType(apiConfig, model.getModelType());
+        normalizeMetadata(model);
+        if (ComfyUiVoiceDesign.isModelCandidate(model.getModelType(), model.getCode(), model.getModelProtocol(), apiConfig)) {
+            validateVoiceModel(model, apiConfig);
             return;
         }
-        validateRequestProtocol(model);
+        validateRequestProtocol(model, apiConfig);
         validateCapabilityPreset(model);
-        validateComfyUiBinding(model);
+        validateComfyUiBinding(model, apiConfig);
     }
 
-    /** 校验唯一支持的 Qwen 音色设计模型及其 ComfyUI 服务绑定。 */
-    private void validateVoiceModel(AiModel model) {
-        var api = aiModelMetadataResolver.resolveApiConfig(model);
+    /** 校验 Qwen 音色设计模型及其 ComfyUI 服务绑定。 */
+    private void validateVoiceModel(AiModel model, ApiConfig api) {
         if (api == null || !Integer.valueOf(1).equals(api.getStatus()) || !PLATFORM.equals(api.getPlatform())) {
             throw new BusinessException(400, "参考音频模型必须绑定已启用的 ComfyUI API 配置");
         }
@@ -375,6 +384,9 @@ public class AiModelService {
         }
         if (model.getComfyuiWorkflowId() != null || model.getCapabilityPresetCode() != null) {
             throw new BusinessException(400, "参考音频模型使用内置音色工作流，不能绑定工作流或能力预设");
+        }
+        if (!model.getMultimodalInputTypes().isEmpty()) {
+            throw new BusinessException(400, "参考音频模型不支持多模态输入");
         }
     }
 
@@ -399,17 +411,18 @@ public class AiModelService {
         }
     }
 
-    private void validateRequestProtocol(AiModel model) {
-        if (model == null || model.getModelType() == null) {
-            return;
-        }
-        var apiConfig = aiModelMetadataResolver.resolveApiConfig(model);
-        apiConfigService.validateModelType(apiConfig, model.getModelType());
+    /** 校验有效请求协议，包括 Google 音频的显式渠道协议和本机 Codex 的文本限制。 */
+    private void validateRequestProtocol(AiModel model, ApiConfig apiConfig) {
         var metadata = aiModelMetadataResolver.resolve(model, apiConfig);
         if (metadata.usesLocalCodex()) {
             validateCodexModel(model, metadata);
         }
-        if (model.getModelType() < 1 || model.getModelType() > 3) {
+        apiConfigService.validateModelProtocol(apiConfig, metadata.modelProtocol());
+        if (Integer.valueOf(MODEL_TYPE_AUDIO).equals(model.getModelType())) {
+            if (GoogleModelFamily.googlePlatform(metadata.platform())
+                    && !metadata.normalizedPlatform().equals(metadata.modelProtocol())) {
+                throw new BusinessException("请选择与当前 Google 渠道对应的请求协议");
+            }
             return;
         }
         if (StrUtil.isBlank(metadata.modelProtocol()) || "generic".equals(metadata.modelProtocol())) {
@@ -438,11 +451,7 @@ public class AiModelService {
         }
     }
 
-    private void validateComfyUiBinding(AiModel model) {
-        if (model == null || model.getApiConfigId() == null) {
-            return;
-        }
-        var apiConfig = apiConfigService.getById(model.getApiConfigId());
+    private void validateComfyUiBinding(AiModel model, ApiConfig apiConfig) {
         if (apiConfig == null) {
             return;
         }

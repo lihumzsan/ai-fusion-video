@@ -2,9 +2,10 @@
 
 import { useCommandRequestKey } from "@/hooks/use-command-request-key";
 
-import { Film, Loader2, Sparkles, Table2, LayoutGrid, Menu, Info } from "lucide-react";
+import { Film, Loader2, Sparkles, Table2, LayoutGrid, Menu, Info, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogContent } from "@/components/shared/dialog-content";
 import { Button } from "@/components/ui/button";
 import { VideoPreviewDialog } from "@/components/dashboard/video-preview-dialog";
 import { motion, useReducedMotion, type Variants } from "framer-motion";
@@ -37,8 +38,10 @@ export function StoryboardWorkspace({ workspace }: { workspace: ReturnType<typeo
     setEditingItem,
     viewMode,
     isSidebarCollapsed,
+    isDetailsCollapsed,
     handleSetViewMode,
     handleSetSidebarCollapsed,
+    handleSetDetailsCollapsed,
     frameDialogItemId,
     frameDialogInitialType,
     sidebarSelection,
@@ -236,10 +239,22 @@ export function StoryboardWorkspace({ workspace }: { workspace: ReturnType<typeo
               </Button>
             </div>
             {/* 右侧边栏触发器 */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hidden shrink-0 2xl:inline-flex"
+              aria-label={isDetailsCollapsed ? "展开详情栏" : "收起详情栏"}
+              title={isDetailsCollapsed ? "展开详情栏" : "收起详情栏"}
+              aria-expanded={!isDetailsCollapsed}
+              aria-controls="storyboard-details-panel"
+              onClick={() => handleSetDetailsCollapsed(!isDetailsCollapsed)}
+            >
+              {isDetailsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}
+            </Button>
             <Sheet open={rightSheetOpen} onOpenChange={setRightSheetOpen}>
               <SheetTrigger
                 render={
-                  <Button variant="ghost" size="icon-sm" className="2xl:hidden shrink-0" aria-label="打开分镜详情">
+                  <Button variant="ghost" size="icon" className="2xl:hidden shrink-0" aria-label="打开分镜详情">
                     <Info className="h-5 w-5" />
                   </Button>
                 }
@@ -270,7 +285,11 @@ export function StoryboardWorkspace({ workspace }: { workspace: ReturnType<typeo
       </motion.div>
 
       {/* 右栏：引用信息 */}
-      <motion.div variants={sectionVariants} className="shrink-0 hidden 2xl:block">
+      <motion.div
+        id="storyboard-details-panel"
+        variants={sectionVariants}
+        className={isDetailsCollapsed ? "hidden" : "hidden shrink-0 2xl:block"}
+      >
       <StoryboardRefPanel
         storyboard={storyboard}
         items={allItems}
@@ -308,6 +327,15 @@ export function StoryboardWorkspace({ workspace }: { workspace: ReturnType<typeo
       />
 
       <EditItemAssetsDialog
+        open={workspace.addingItem !== null}
+        item={workspace.addingItem}
+        assetsList={assetsList}
+        creating
+        onClose={() => workspace.setAddingItem(null)}
+        onConfirm={workspace.handleConfirmAddItem}
+      />
+
+      <EditItemAssetsDialog
         open={editAssetsOpen}
         item={editingItem}
         assetsList={assetsList}
@@ -316,7 +344,9 @@ export function StoryboardWorkspace({ workspace }: { workspace: ReturnType<typeo
           setEditingItem(null);
         }}
         onConfirm={async ({ characterIds, sceneAssetItemId, propIds }) => {
-          if (!editingItem) return;
+          if (!editingItem) {
+            return;
+          }
           try {
             const payload = {
               version: editingItem.version,

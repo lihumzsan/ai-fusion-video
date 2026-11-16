@@ -20,12 +20,12 @@ import { OverlayScrollArea } from "@/components/dashboard/overlay-scroll-area";
 import { AssistantBrandIcon } from "./assistant-brand-icon";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogContent } from "@/components/shared/dialog-content";
 import type { AgentConversation } from "@/lib/api/ai-assistant";
 import { useAssistantStore } from "@/lib/store/assistant-store";
 import { cn } from "@/lib/utils";
@@ -273,7 +273,7 @@ export function ConversationNavigation({ onSelected }: { onSelected?: () => void
   const setDrawerOpen = useAssistantStore((state) => state.setDrawerOpen);
   return (
     <>
-      <aside className={cn("assistant-navigation", drawerOpen && "assistant-navigation-open")}>
+      <aside data-sidebar-navigation="assistant" className={cn("assistant-navigation", drawerOpen && "assistant-navigation-open")}>
         <ConversationList onSelected={onSelected} />
       </aside>
       {drawerOpen ? (

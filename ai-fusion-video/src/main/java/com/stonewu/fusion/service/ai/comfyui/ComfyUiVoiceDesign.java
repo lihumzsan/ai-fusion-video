@@ -29,6 +29,14 @@ public class ComfyUiVoiceDesign {
     private final ComfyUiNativeClient client;
     private final ComfyUiOutputResolver resolver;
 
+    /** 识别走内置音色工作流校验的候选模型，包括配置尚不完整的 ComfyUI 音频模型。 */
+    public static boolean isModelCandidate(Integer modelType, String code, String protocol, ApiConfig api) {
+        String platform = ComfyUiWorkflowService.PLATFORM;
+        return Integer.valueOf(MODEL_TYPE).equals(modelType)
+                && (MODEL_CODE.equals(code) || platform.equals(protocol)
+                || (api != null && platform.equals(api.getPlatform())));
+    }
+
     /** 每次提交固定独立输出路径，并用同一任务标识复原种子。 */
     public ObjectNode render(String description, String previewText, String language, String promptId) {
         if (description.isBlank() || description.length() > 4000) {

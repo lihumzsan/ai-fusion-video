@@ -60,7 +60,9 @@ public class CanvasModelCatalog {
     private static final Set<String> MEDIA_FIELDS = Set.of(
             "prompt", "firstFrame", "lastFrame", "referenceImages", "referenceVideos", "referenceAudios");
     private static final List<String> PARAMETERS = List.of("supportedAspectRatios", "supportedResolutions",
-            "supportedSizes", "minDuration", "maxDuration", "maxDurationByResolution", "defaultDuration", "defaultResolution",
+            "supportedSizes", "defaultAspectRatio", "supportAutoSize", "supportCustomSize", "sizeMultiple",
+            "minPixels", "maxPixels", "maxEdge", "maxAspectRatio", "gptImage", "defaultWidth", "defaultHeight",
+            "minDuration", "maxDuration", "maxDurationByResolution", "defaultDuration", "defaultResolution",
             "supportedDurations", "supportedDurationsByResolution",
             "framesWithReferenceVideos",
             "supportCameraFixed",
@@ -149,7 +151,7 @@ public class CanvasModelCatalog {
 
     private Option describe(AiModel model) {
         var api = model.getApiConfigId() == null ? null : apis.getById(model.getApiConfigId());
-        if (Integer.valueOf(ComfyUiVoiceDesign.MODEL_TYPE).equals(model.getModelType())) {
+        if (ComfyUiVoiceDesign.isModelCandidate(model.getModelType(), model.getCode(), model.getModelProtocol(), api)) {
             return new Option(model.getId(), model.getName(), "voice", "audio", Map.of(), Map.of(), List.of(),
                     voiceUnavailable(model, api));
         }

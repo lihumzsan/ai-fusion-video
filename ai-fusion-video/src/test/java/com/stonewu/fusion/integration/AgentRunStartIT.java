@@ -1,5 +1,6 @@
 package com.stonewu.fusion.integration;
 
+import com.stonewu.fusion.integration.support.AgentRuntimeContainers;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -72,8 +73,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AgentRunStartIT {
 
-    private static final int REDIS_PORT = 6379;
-
     @Container
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4.6")
             .withDatabaseName("ai_fusion_video")
@@ -81,17 +80,14 @@ class AgentRunStartIT {
             .withPassword("afv-test");
 
     @Container
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7.4.5-alpine")
-            .withExposedPorts(REDIS_PORT);
+    private static final GenericContainer<?> REDIS = AgentRuntimeContainers.redis();
 
     @DynamicPropertySource
     static void configureDatabase(DynamicPropertyRegistry properties) {
         properties.add("spring.datasource.url", MYSQL::getJdbcUrl);
         properties.add("spring.datasource.username", MYSQL::getUsername);
         properties.add("spring.datasource.password", MYSQL::getPassword);
-        properties.add("spring.data.redis.host", REDIS::getHost);
-        properties.add("spring.data.redis.port", () -> REDIS.getMappedPort(REDIS_PORT));
-        properties.add("spring.data.redis.password", () -> "");
+        AgentRuntimeContainers.registerRedisProperties(properties, REDIS);
     }
 
     @Autowired

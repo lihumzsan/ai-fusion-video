@@ -25,6 +25,7 @@ import com.stonewu.fusion.service.ai.run.model.StartedAgentRun;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -51,6 +52,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers(disabledWithoutDocker = false)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AgentReplayLiveIT {
 
     private static final int REDIS_PORT = 6379;

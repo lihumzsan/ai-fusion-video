@@ -3,6 +3,7 @@ package com.stonewu.fusion.service.ai.provider.codex;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stonewu.fusion.common.BusinessException;
 import com.stonewu.fusion.entity.ai.AiModel;
+import com.stonewu.fusion.service.ai.agentscope.message.AgentModelCallFailure;
 import com.stonewu.fusion.service.ai.agentscope.message.TrackedAgentChatModel;
 import com.stonewu.fusion.service.ai.provider.AiProviderContext;
 import com.stonewu.fusion.service.ai.provider.CodexAiProvider;
@@ -280,8 +281,13 @@ class CodexAppServerClientTests {
             throw new AssertionError("Codex must not be resubmitted");
         }, model, ledger, "fingerprint")) {
             StepVerifier.create(tracked.stream(List.of(user()), tools, null))
-                    .expectErrorMatches(error -> error instanceof BusinessException
-                            && (error instanceof CodexTextFailure) == !scenario.equals("disconnect"))
+                    .expectErrorSatisfies(error -> assertThat(error)
+                            .isInstanceOfSatisfying(AgentModelCallFailure.class, modelFailure -> {
+                                assertThat(modelFailure.retryable()).isFalse();
+                                assertThat(modelFailure.getCause()).isInstanceOf(BusinessException.class);
+                                assertThat(modelFailure.getCause() instanceof CodexTextFailure)
+                                        .isEqualTo(!scenario.equals("disconnect"));
+                            }))
                     .verify(Duration.ofSeconds(10));
         }
 

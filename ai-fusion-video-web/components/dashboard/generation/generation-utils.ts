@@ -6,7 +6,7 @@ import type {
 } from "./generation-types";
 import type { GenerationCapabilities } from "@/lib/generation-capabilities";
 import { automaticVideoDuration } from "@/lib/video-model-rules";
-import { resolutionChoices } from "@/lib/image-output-sizes";
+import { imageOutputDefaults } from "@/lib/image-output-sizes";
 
 export function generationFormForModel(
   current: GenerationFormState,
@@ -15,13 +15,7 @@ export function generationFormForModel(
   let ratio = capabilities.defaultAspectRatio ?? capabilities.supportedAspectRatios[0] ?? "";
   let resolution = capabilities.defaultResolution ?? capabilities.supportedResolutions[0] ?? "";
   if (capabilities.imageSizes) {
-    if (!capabilities.supportedAspectRatios.includes(ratio)) {
-      ratio = capabilities.supportedAspectRatios[0] ?? "";
-    }
-    const choices = resolutionChoices(capabilities, ratio);
-    if (!choices.includes(resolution)) {
-      resolution = choices[0] ?? "";
-    }
+    ({ ratio, resolution } = imageOutputDefaults(capabilities));
   }
   return {
     ...current,
@@ -210,7 +204,9 @@ export function getGenerationParameterItems(
   }
 
   const modeLabel =
-    task.generateMode === "image2video"
+    task.referenceVideoUrls && task.referenceVideoUrls !== "[]"
+      ? "参考视频生成"
+      : task.generateMode === "image2video"
       ? "图生视频"
       : task.generateMode === "text2video"
         ? "文生视频"

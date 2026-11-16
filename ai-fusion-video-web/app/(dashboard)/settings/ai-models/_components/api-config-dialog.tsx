@@ -14,13 +14,13 @@ import {
 } from "@/lib/api/ai-model";
 import {
   Dialog,
-  DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
+import { DialogContent } from "@/components/shared/dialog-content";
 import {
   Select,
   SelectTrigger,
@@ -144,7 +144,7 @@ export function ApiConfigDialog({
               : editingConfig.textProtocol || "",
           imageProtocol: editingConfig.imageProtocol || "",
           videoProtocol: editingConfig.videoProtocol || "",
-          apiUrl: editingConfig.apiUrl || "",
+          apiUrl: editingConfig.apiUrl || (editingConfig.platform === "vertex_ai" ? "us-central1" : ""),
           autoAppendV1Path: editingConfig.autoAppendV1Path ?? true,
           proxyType: editingConfig.proxyType || "none",
           proxyHost: editingConfig.proxyHost || "",
@@ -371,10 +371,28 @@ export function ApiConfigDialog({
                   setNoKey(false);
                   updateField("platform", platform);
                   updateField("providerId", "");
-                  if (localCodex) {
+                  setForm((previous) => ({
+                    ...previous,
+                    textProtocol: localCodex && platform === "openai_compatible"
+                      ? "openai_compatible"
+                      : getProtocolOptionsForModelType(1, null, providers).some((option) => option.value === previous.textProtocol) ? previous.textProtocol : "",
+                    imageProtocol: getProtocolOptionsForModelType(2, null, providers).some((option) => option.value === previous.imageProtocol) ? previous.imageProtocol : "",
+                    videoProtocol: getProtocolOptionsForModelType(3, null, providers).some((option) => option.value === previous.videoProtocol) ? previous.videoProtocol : "",
+                  }));
+                  if (platform === "vertex_ai" || platform === "vertex_ai_api_key") {
                     setForm((previous) => ({
                       ...previous,
-                      textProtocol: platform === "openai_compatible" ? "openai_compatible" : "",
+                      textProtocol: "vertex_ai",
+                      imageProtocol: "vertex_ai",
+                      videoProtocol: "vertex_ai",
+                      apiUrl: form.platform?.startsWith("vertex_ai") ? previous.apiUrl || "global" : "global",
+                      autoAppendV1Path: false,
+                    }));
+                  }
+                  if (platform === "gemini") {
+                    setForm((previous) => ({
+                      ...previous, textProtocol: "gemini", imageProtocol: "gemini", videoProtocol: "gemini",
+                      apiUrl: "", autoAppendV1Path: false,
                     }));
                   }
                   if (v === "openai_compatible") {
@@ -638,6 +656,8 @@ export function ApiConfigDialog({
                     .map((item) => {
                       const options = getProtocolOptionsForModelType(
                         item.modelType,
+                        form.providerId,
+                        providers,
                       );
                       return (
                         <div
@@ -657,7 +677,7 @@ export function ApiConfigDialog({
                                   : String(value),
                               )
                             }
-                            disabled={protocolsLocked}
+                            disabled={protocolsLocked || providersLoading || !!providersError}
                             items={[
                               { value: UNSET_PROTOCOL_VALUE, label: "未配置" },
                               ...options.map((option) => ({

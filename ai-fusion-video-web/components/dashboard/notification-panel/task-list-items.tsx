@@ -11,12 +11,14 @@ import { ElapsedText } from "./hooks";
 export function TaskListItem({
   label,
   subtitle,
+  description,
   icon,
   selected,
   onClick,
 }: {
   label: string;
   subtitle: ReactNode;
+  description?: string | null;
   icon: ReactNode;
   selected: boolean;
   onClick: () => void;
@@ -33,8 +35,13 @@ export function TaskListItem({
     >
       {icon}
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium truncate">{label}</p>
+        <p className="text-xs font-medium truncate" title={label}>{label}</p>
         <p className="text-[10px] text-muted-foreground truncate">{subtitle}</p>
+        {description && (
+          <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground" title={description}>
+            {description}
+          </p>
+        )}
       </div>
     </button>
   );

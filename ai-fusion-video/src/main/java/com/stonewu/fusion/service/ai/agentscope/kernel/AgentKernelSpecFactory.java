@@ -16,6 +16,7 @@ import com.stonewu.fusion.service.ai.agentscope.tool.AgentScopeToolSchema;
 import com.stonewu.fusion.service.ai.configuration.AgentDefinitionConfiguration;
 import com.stonewu.fusion.service.ai.configuration.AgentKernelSkills;
 import com.stonewu.fusion.service.ai.run.AgentExecutionLimits;
+import com.stonewu.fusion.service.ai.text.AgentContentTools;
 import com.stonewu.fusion.service.ai.run.kernel.AgentKernelSnapshotPayload;
 import com.stonewu.fusion.service.ai.run.kernel.ToolManifestSnapshot;
 import com.stonewu.fusion.service.canvas.agent.CanvasAgentToolNames;
@@ -33,7 +34,7 @@ import java.util.stream.Collectors;
 public final class AgentKernelSpecFactory {
 
     public static final String DEFAULT_AGENT_KEY = "ai_assistant_agent";
-    public static final String TOOL_WHITELIST_VERSION = "afv-tools-v2";
+    public static final String TOOL_WHITELIST_VERSION = "afv-tools-v4";
     public static final String OWNER_USER_ID_VARIABLE = "agentWorkspaceUserId";
     public static final String MCP_CONFIG_FINGERPRINT_VARIABLE = "agentMcpConfigFingerprint";
     public static final String TOOL_EXECUTION_MODE_VARIABLE = "agentToolExecutionMode";
@@ -194,6 +195,9 @@ public final class AgentKernelSpecFactory {
         }
         Map<String, String> variables = new LinkedHashMap<>(AgentPromptVariables.forChild(
                 parent.promptVariables(), project, input));
+        if (framePromptOnly(childType, parent.promptVariables())) {
+            variables.put("promptOnly", "true");
+        }
         if (parent.promptVariables().containsKey(AgentDefinitionConfiguration.SNAPSHOT_VARIABLE)) {
             variables.put(AgentDefinitionConfiguration.SNAPSHOT_VARIABLE,
                     parent.promptVariables().get(AgentDefinitionConfiguration.SNAPSHOT_VARIABLE));
@@ -245,7 +249,8 @@ public final class AgentKernelSpecFactory {
         String definitionKey = payload.agentDefinitionStableKey();
         String agentType = DEFAULT_AGENT_KEY.equals(definitionKey) ? null : definitionKey;
         Long ownerUserId = ownerUserId(payload.promptVariables());
-        ToolSelection available = selectTools(agentType, null, null, ownerUserId, payload.promptVariables());
+        ToolSelection available = withContentReaders(
+                selectTools(agentType, null, null, ownerUserId, payload.promptVariables()));
         Map<String, AgentKernelToolManifest> availableByName = new LinkedHashMap<>();
         for (AgentKernelToolManifest tool : available.manifest()) {
             availableByName.put(tool.toolName(), tool);
@@ -253,12 +258,14 @@ public final class AgentKernelSpecFactory {
         List<AgentKernelToolManifest> restoredManifest = new ArrayList<>();
         Set<String> restoredWhitelist = new LinkedHashSet<>();
         for (ToolManifestSnapshot persisted : payload.tools()) {
+            if (!TOOL_WHITELIST_VERSION.equals(persisted.implementationVersion())) {
+                throw new IllegalStateException("任务使用的工具协议已更新，请重新发起任务；已保存的内容会保留");
+            }
             AgentKernelToolManifest live = availableByName.get(persisted.name());
             if (live == null
                     || !persisted.schemaSha256().equals(live.schemaSha256())
                     || persisted.readOnly() != live.readOnly()
-                    || persisted.concurrencySafe() != live.concurrencySafe()
-                    || !TOOL_WHITELIST_VERSION.equals(persisted.implementationVersion())) {
+                    || persisted.concurrencySafe() != live.concurrencySafe()) {
                 throw new IllegalStateException(
                         "Persisted AgentScope tool is unavailable: " + persisted.name());
             }
@@ -296,7 +303,11 @@ public final class AgentKernelSpecFactory {
             ToolSelection tools,
             String modelFingerprint,
             Integer maxIters) {
+        tools = withContentReaders(withGenerationWaiter(tools));
         String safePrompt = requireText(systemPrompt, "systemPrompt");
+        if (!tools.whitelist().isEmpty()) {
+            safePrompt += "\n\n" + AgentContentTools.INSTRUCTION;
+        }
         AgentKernelKey key = AgentKernelKey.create(
                 definitionKey,
                 modelFingerprint,
@@ -324,6 +335,35 @@ public final class AgentKernelSpecFactory {
                 tools.manifest().stream().filter(item -> CanvasAgentNodeTypes.permittedTool(item.toolName())).toList(),
                 tools.whitelist().stream().filter(CanvasAgentNodeTypes::permittedTool)
                         .collect(Collectors.toCollection(LinkedHashSet::new)));
+    }
+
+    private ToolSelection withContentReaders(ToolSelection tools) {
+        var manifest = new ArrayList<>(tools.manifest());
+        var whitelist = new LinkedHashSet<>(tools.whitelist());
+        for (String name : AgentContentTools.required(tools.whitelist())) {
+            if (!whitelist.contains(name)) {
+                var schema = AgentScopeToolSchema.prepare(objectMapper, AgentContentTools.schema(name), name);
+                add(manifest, whitelist, new AgentKernelToolManifest(name,
+                        AgentKernelToolManifest.schemaSha256(schema.canonicalJson()), true, true));
+            }
+        }
+        return new ToolSelection(manifest, whitelist);
+    }
+
+    private ToolSelection withGenerationWaiter(ToolSelection tools) {
+        if (Collections.disjoint(tools.whitelist(), Set.of("generate_image", "generate_video"))
+                || tools.whitelist().contains("await_generation_task")) {
+            return tools;
+        }
+        var waiter = toolConfigService.getEnabledTools().stream()
+                .filter(tool -> tool.getToolName().equals("await_generation_task")).findFirst()
+                .orElseThrow(() -> new IllegalStateException("媒体生成需要已启用的等待结果工具"));
+        var schema = AgentScopeToolSchema.prepare(objectMapper, waiter.getParametersSchema(), waiter.getToolName());
+        var manifest = new ArrayList<>(tools.manifest());
+        var whitelist = new LinkedHashSet<>(tools.whitelist());
+        add(manifest, whitelist, new AgentKernelToolManifest(waiter.getToolName(),
+                AgentKernelToolManifest.schemaSha256(schema.canonicalJson()), waiter.isReadOnly(), waiter.isConcurrencySafe()));
+        return new ToolSelection(manifest, whitelist);
     }
 
     private ToolSelection selectTools(
@@ -412,7 +452,19 @@ public final class AgentKernelSpecFactory {
                 add(manifest, whitelist, mcpTool);
             }
         }
+        if (framePromptOnly(agentType, variables)) {
+            Set<String> permitted = Set.of("get_project", "get_storyboard", "get_storyboard_scene_items",
+                    "list_project_assets", "get_generation_model_capabilities", "generate_storyboard_frame",
+                    "update_storyboard_item_frame");
+            return new ToolSelection(manifest.stream().filter(tool -> permitted.contains(tool.toolName())).toList(),
+                    whitelist.stream().filter(permitted::contains).collect(Collectors.toCollection(LinkedHashSet::new)));
+        }
         return new ToolSelection(manifest, whitelist);
+    }
+
+    private boolean framePromptOnly(String agentType, Map<String, String> variables) {
+        return ("storyboard_frame_gen".equals(agentType) || "storyboard_frame_executor".equals(agentType))
+                && "true".equals(variables.get("promptOnly"));
     }
 
     private void add(

@@ -26,14 +26,13 @@ import {
   type GenerationAssetTarget,
   type GenerationFormState,
   type GenerationResultItem,
+  type GenerationTask,
   type SimpleAttachment,
   type SimpleAttachmentKind,
   type SimpleAttachmentUploadOption,
   type WorkbenchMode,
 } from "./generation/generation-types";
 import {
-  getResultMediaUrl,
-  getResultPreviewUrl,
   parseLimit,
   generationFormForModel,
 } from "./generation/generation-utils";
@@ -41,8 +40,10 @@ import { GenerationSubmissionNotice } from "./generation/generation-submission-n
 import { useGenerationSubmission } from "./generation/use-generation-submission";
 import { useGenerationHistory } from "./generation/use-generation-history";
 import { generationSubmitRequest } from "./generation/generation-submit-request";
-import { resolutionChoices } from "@/lib/image-output-sizes";
+import { changeImageOutput, imageOutputIssue } from "@/lib/image-output-sizes";
 import { useReferenceImageUploadAvailability } from "./generation/use-reference-image-upload-availability";
+import { appendResultReference, generationFormFromTask, removeGenerationReference } from "./generation/generation-reference-input";
+import { useGenerationForm } from "./generation/use-generation-form";
 
 interface GenerationWorkbenchProps {
   mode: WorkbenchMode;
@@ -65,7 +66,7 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
   const [presets, setPresets] = useState<ModelPreset[]>([]);
   const [modelId, setModelId] = useState<number | undefined>();
   const [loadingModels, setLoadingModels] = useState(true);
-  const [form, setForm] = useState<GenerationFormState>(EMPTY_GENERATION_FORM);
+  const [form, setForm, getForm] = useGenerationForm();
   const submission = useGenerationSubmission(mode);
   const historyState = useGenerationHistory(mode);
   const {
@@ -126,7 +127,7 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
     return () => {
       cancelled = true;
     };
-  }, [modelType]);
+  }, [modelType, setForm]);
 
   const selectedModel = models.find((model) => model.id === modelId);
   const capabilities = useMemo(
@@ -179,10 +180,7 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
     setForm((current) => {
       const next = { ...current, ...patch };
       if (mode === "image" && capabilities && patch.ratio !== undefined) {
-        const choices = resolutionChoices(capabilities, next.ratio);
-        if (!choices.includes(next.resolution)) {
-          next.resolution = choices[0] ?? "";
-        }
+        Object.assign(next, changeImageOutput(capabilities, current, patch));
       }
       if (mode === "video" && capabilities?.videoRules) {
         const allowed = videoRatioOptions(
@@ -495,15 +493,8 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
     });
   };
 
-  const removeSimpleAttachment = (url: string) => {
-    setForm((current) => ({
-      ...current,
-      firstFrame: current.firstFrame.filter((value) => value !== url),
-      lastFrame: current.lastFrame.filter((value) => value !== url),
-      referenceImages: current.referenceImages.filter((value) => value !== url),
-      referenceVideos: current.referenceVideos.filter((value) => value !== url),
-      referenceAudios: current.referenceAudios.filter((value) => value !== url),
-    }));
+  const removeSimpleAttachment = (attachment: SimpleAttachment) => {
+    setForm((current) => removeGenerationReference(current, attachment));
   };
 
   const validate = () => {
@@ -528,8 +519,11 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
       }
     } else if (!form.prompt.trim()) {
       return "请输入提示词";
-    } else if (capabilities.supportedResolutions.length && !resolutionChoices(capabilities, form.ratio).includes(form.resolution)) {
-      return "请选择当前画面比例支持的分辨率";
+    } else {
+      const issue = imageOutputIssue(capabilities, form);
+      if (issue) {
+        return issue;
+      }
     }
     const referenceImages = clean(form.referenceImages);
     if (
@@ -597,31 +591,32 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
     focusComposer();
   };
 
-  const useReference = (item: GenerationResultItem) => {
-    if (mode === "video" && "videoUrl" in item && item.videoUrl) {
-      if (capabilities?.supportsReferenceVideos) {
-        updateForm({
-          referenceVideos: [...form.referenceVideos, item.videoUrl].slice(
-            0,
-            parseLimit(capabilities.maxReferenceVideos, 1),
-          ),
-        });
-        toast.success("已加入参考视频");
-        focusComposer();
-        return;
-      }
-      const preview = getResultPreviewUrl(item);
-      if (preview) {
-        addSimpleAttachments([preview]);
-      }
-    } else {
-      const media = getResultMediaUrl(item) || getResultPreviewUrl(item);
-      if (media) {
-        addSimpleAttachments([media]);
-      }
+  const reuseTask = (task: GenerationTask) => {
+    const model = models.find((candidate) => candidate.id === task.modelId);
+    if (!model) {
+      toast.error("原任务的模型已停用或不可用，请先在模型配置中启用");
+      return;
     }
-    toast.success("已加入参考素材");
-    focusComposer();
+    try {
+      const defaults = generationFormForModel(EMPTY_GENERATION_FORM, resolveGenerationCapabilities(model, presets));
+      const restored = generationFormFromTask(mode, task, defaults);
+      setModelId(model.id);
+      setForm(restored);
+      focusComposer();
+    } catch (error) {
+      toastApiError(error, "无法恢复原任务");
+    }
+  };
+
+  const useReference = (item: GenerationResultItem) => {
+    try {
+      const added = appendResultReference(mode, getForm(), capabilities, item);
+      updateForm(added.form);
+      toast.success(`已加入${added.label}`);
+      focusComposer();
+    } catch (error) {
+      toastApiError(error, "无法添加参考素材");
+    }
   };
 
   const title = mode === "image" ? "生图" : "生视频";
@@ -666,13 +661,15 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
             模型配置
           </motion.a>
         </motion.header>
-        <GenerationSubmissionNotice
-          submission={submission}
-          onConfirmed={() => void loadHistory(historyLimit)}
-        />
-        {capabilities?.unavailable && (
-          <p role="alert" className="text-sm text-destructive">{capabilities.unavailable}</p>
-        )}
+        <div className={cn("mx-auto w-full", advancedMode ? "max-w-none" : "max-w-[1180px]")}>
+          <GenerationSubmissionNotice
+            submission={submission}
+            onConfirmed={() => void loadHistory(historyLimit)}
+          />
+          {capabilities?.unavailable && (
+            <p role="alert" className="text-sm text-destructive">{capabilities.unavailable}</p>
+          )}
+        </div>
       </div>
 
       <GenerationWorkspaceLayout
@@ -726,7 +723,7 @@ function GenerationWorkbenchContent({ mode }: GenerationWorkbenchProps) {
             setHistoryLimit((current) => Math.min(100, current + 10))
           }
           onUseSuggestion={reusePrompt}
-          onReusePrompt={reusePrompt}
+          onReuseTask={reuseTask}
           onUseReference={useReference}
           onCancel={(taskId) => void cancelTask(taskId)}
           cancellingTaskIds={cancellingTaskIds}

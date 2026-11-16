@@ -192,10 +192,31 @@ class AiModelServiceTests {
         verify(aiModelMapper, never()).insert(any(AiModel.class));
     }
 
+    @ParameterizedTest
+    @CsvSource({"gemini, gemini", "vertex_ai, vertex_ai", "vertex_ai_api_key, vertex_ai"})
+    void googleAudioUsesItsChannelProtocolWithoutComfyuiBinding(String platform, String protocol) {
+        var model = AiModel.builder().name("Gemini TTS").code("gemini-2.5-flash-preview-tts")
+                .modelType(4).modelProtocol(protocol.equals("gemini") ? "vertex_ai" : "gemini")
+                .apiConfigId(1L).build();
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder().platform(platform).build());
+
+        assertThatThrownBy(() -> aiModelService.createAiModel(model)).hasMessageContaining("Google 渠道");
+        verify(aiModelMapper, never()).insert(any(AiModel.class));
+
+        model.setModelProtocol(protocol);
+        aiModelService.createAiModel(model);
+        verify(aiModelMapper).insert(model);
+        verifyNoInteractions(comfyUiWorkflowService, generationCapabilities);
+        assertThatThrownBy(() -> aiModelService.requireAgentModel(model)).hasMessageContaining("不能用于助手对话");
+    }
+
     @Test
     void existingVoiceAndVideoModelsCannotConvertIntoEachOther() {
-        var voice = AiModel.builder().id(12L).modelType(4).build();
-        var video = AiModel.builder().id(13L).modelType(3).build();
+        var voice = AiModel.builder().id(12L).modelType(4).modelProtocol("comfyui")
+                .code("qwen3-tts-voice-design-1.7b").build();
+        var video = AiModel.builder().id(13L).modelType(3).apiConfigId(1L).build();
+        when(apiConfigService.getById(1L)).thenReturn(ApiConfig.builder().platform("comfyui").build());
+        when(apiConfigService.getById(2L)).thenReturn(ApiConfig.builder().platform("gemini").build());
         when(aiModelMapper.selectById(12L)).thenReturn(voice);
         when(aiModelMapper.selectById(13L)).thenReturn(video);
 
@@ -204,6 +225,9 @@ class AiModelServiceTests {
                 .hasMessageContaining("不能与其他模型类型互相转换");
         assertThatThrownBy(() -> aiModelService.updateAiModel(13L, null, null, null, null, 4, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null))
+                .hasMessageContaining("不能与其他模型类型互相转换");
+        assertThatThrownBy(() -> aiModelService.updateAiModel(12L, null, "gemini-2.5-flash-preview-tts", "gemini",
+                null, 4, null, null, null, null, null, null, 2L, null, null, null, null, null, null, null))
                 .hasMessageContaining("不能与其他模型类型互相转换");
         assertThatThrownBy(() -> aiModelService.requireAgentModel(voice)).hasMessageContaining("生成参考音频");
         verify(aiModelMapper, never()).update(any(AiModel.class), any());

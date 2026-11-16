@@ -47,14 +47,18 @@
         LIMIT 1
     </select>
     <select id="selectProjectionRecoveryCandidates" resultType="com.stonewu.fusion.entity.ai.AgentRun">
-        SELECT *
-        FROM afv_agent_run
-        WHERE terminal_sequence IS NOT NULL
+        SELECT r.*
+        FROM afv_agent_run r
+        WHERE r.terminal_sequence IS NOT NULL
           AND (
-            projected_through_sequence &lt; terminal_sequence
-            OR projection_completed_at IS NULL
+            r.projected_through_sequence &lt; r.terminal_sequence
+            OR r.projection_completed_at IS NULL
           )
-        ORDER BY id
+          AND NOT EXISTS (
+            SELECT 1 FROM afv_agent_conversation c
+            WHERE c.conversation_id = r.conversation_id AND c.deleted = 1
+          )
+        ORDER BY r.id
         LIMIT #{limit}
     </select>
     <select id="selectAuthorizedByRunId" resultType="com.stonewu.fusion.entity.ai.AgentRun">
@@ -298,7 +302,7 @@
     </select>
     <select id="waitingForCanvas" resultType="String">
         SELECT run_id FROM afv_agent_run WHERE status='WAITING_EXTERNAL'
-          AND waiting_tool_name='await_canvas_run' AND canvas_scope_json IS NOT NULL
+          AND waiting_tool_name='await_canvas_run'
           AND external_check_after &lt;= UTC_TIMESTAMP(3) AND wait_expires_at &gt; UTC_TIMESTAMP(3)
         ORDER BY external_check_after, id LIMIT 32
     </select>

@@ -25,6 +25,7 @@ import com.stonewu.fusion.service.media.MediaSourceFetcher;
 import com.stonewu.fusion.service.media.MediaSourceImportService;
 import com.stonewu.fusion.service.media.MediaRemoteAddressPolicy;
 import com.stonewu.fusion.service.storage.LegacyMediaRoot;
+import com.stonewu.fusion.service.storage.BuiltInLocalStorage;
 import com.stonewu.fusion.service.canvas.CanvasAccessPolicy;
 import com.stonewu.fusion.service.canvas.CanvasActorResolver;
 import com.stonewu.fusion.service.canvas.CanvasJson;
@@ -46,6 +47,12 @@ import com.stonewu.fusion.service.resource.AssetCommandSupport;
 import com.stonewu.fusion.service.resource.AssetFields;
 import com.stonewu.fusion.service.resource.AssetResourcePatchHandler;
 import com.stonewu.fusion.service.resource.AssetResourceCreateHandler;
+import com.stonewu.fusion.service.resource.AssetBatchCreateHandler;
+import com.stonewu.fusion.service.resource.AssetResourceQueryService;
+import com.stonewu.fusion.service.resource.ResourceQueryService;
+import com.stonewu.fusion.service.resource.ResourceSnapshotCache;
+import com.stonewu.fusion.repository.resource.AssetReadRepository;
+import com.stonewu.fusion.repository.resource.ProjectWorkspaceRepository;
 import com.stonewu.fusion.service.resource.AssetResourceDeleteHandler;
 import com.stonewu.fusion.service.resource.ProjectFields;
 import com.stonewu.fusion.service.resource.ProjectResourcePatchHandler;
@@ -75,6 +82,10 @@ import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
 import com.stonewu.fusion.service.media.MediaAccessTickets;
+import com.stonewu.fusion.service.media.deletion.MediaDeletionService;
+import com.stonewu.fusion.service.media.deletion.MediaDeletionReferences;
+import com.stonewu.fusion.service.media.deletion.MediaPurgeTransactions;
+import com.stonewu.fusion.service.media.deletion.MediaPurgeWorker;
 import com.stonewu.fusion.service.media.MediaBlobStore;
 import com.stonewu.fusion.service.media.lifecycle.MediaBlobLocks;
 import com.stonewu.fusion.service.media.lifecycle.MediaBlobLockConfiguration;
@@ -84,6 +95,7 @@ import com.stonewu.fusion.service.media.MediaMetadataCache;
 import com.stonewu.fusion.service.media.MediaProbe;
 import com.stonewu.fusion.service.media.MediaPresetReferences;
 import com.stonewu.fusion.service.media.MediaRegistryTransactions;
+import com.stonewu.fusion.service.media.ManagedStorageConfiguration;
 import com.stonewu.fusion.service.media.MediaResourceQueries;
 import com.stonewu.fusion.service.media.MediaStorageConfigGuard;
 import com.stonewu.fusion.service.media.model.MediaResource;
@@ -213,6 +225,7 @@ abstract class MediaResourceTestContext {
         context.registerBean(ValidatorFactory.class, Validation::buildDefaultValidatorFactory);
         context.registerBean(Validator.class, () -> context.getBean(ValidatorFactory.class).getValidator());
         context.registerBean(StorageConfigMapper.class, () -> storageMapper);
+        context.registerBean(BuiltInLocalStorage.class, () -> new BuiltInLocalStorage(directory.toString()));
         context.registerBean(MediaResourceRepository.class, () -> repository);
         context.registerBean(MediaCryptor.class, () -> spy(new MediaCryptor()));
         context.registerBean(S3ClientFactory.class, () -> spy(new S3ClientFactory()));
@@ -236,6 +249,8 @@ abstract class MediaResourceTestContext {
                 AssetCommandSupport.class, AssetFields.class, AssetMutationRepository.class,
                 AssetResourcePatchHandler.class,
                 AssetResourceCreateHandler.class, AssetResourceDeleteHandler.class, ProjectFields.class,
+                AssetBatchCreateHandler.class, AssetResourceQueryService.class, ResourceQueryService.class,
+                ResourceSnapshotCache.class, AssetReadRepository.class, ProjectWorkspaceRepository.class,
                 ProjectResourcePatchHandler.class,
                 StoryboardCommandSupport.class, StoryboardFields.class, StoryboardRelations.class,
                 StoryboardVersionView.class,
@@ -252,9 +267,11 @@ abstract class MediaResourceTestContext {
                 ComposeWritebackHandler.class,
                 MediaBlobLockConfiguration.class, MediaBlobLocks.class, MediaBlobStore.class,
                 S3StorageConfigResolver.class,
-                StorageProviderRegistry.class, MediaProbe.class, MediaRegistryTransactions.class,
+                StorageProviderRegistry.class, MediaProbe.class, ManagedStorageConfiguration.class, MediaRegistryTransactions.class,
                 MediaIntakeService.class,
                 MediaMetadataCache.class, MediaResourceQueries.class, MediaAccessTickets.class,
+                MediaDeletionService.class, MediaDeletionReferences.class,
+                MediaPurgeTransactions.class, MediaPurgeWorker.class,
                 MediaStorageConfigGuard.class,
                 MediaResourceController.class, MediaContentController.class);
         context.refresh();

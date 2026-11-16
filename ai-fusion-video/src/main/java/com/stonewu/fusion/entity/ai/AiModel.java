@@ -1,5 +1,6 @@
 package com.stonewu.fusion.entity.ai;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -15,7 +16,7 @@ import java.util.Map;
  * AI 模型实体
  * <p>
  * 对应数据库表：afv_ai_model
- * 管理系统中可用的文本、图片、视频与参考音频模型配置。
+ * 管理系统中可用的文本、图片、视频与音频模型配置。
  */
 @TableName(value = "afv_ai_model", autoResultMap = true)
 @Data
@@ -45,6 +46,7 @@ public class AiModel extends BaseEntity {
     /**
      * 模型级请求协议覆盖；为空时继承 API 配置中对应能力类型的默认协议
      */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String modelProtocol;
 
     /**
@@ -53,7 +55,7 @@ public class AiModel extends BaseEntity {
     private String capabilityPresetCode;
 
     /**
-     * 模型类型：1-文本对话 2-图片生成 3-视频生成 4-参考音频生成
+     * 模型类型：1-文字生成 2-图像生成 3-视频生成 4-音频生成
      */
     private Integer modelType;
 

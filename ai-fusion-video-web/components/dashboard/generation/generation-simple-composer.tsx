@@ -4,13 +4,11 @@ import { useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { toast } from "sonner";
 import {
   CircleAlert,
-  FileVideo2,
   ImagePlus,
   Loader2,
   Music2,
   SlidersHorizontal,
   Sparkles,
-  X,
 } from "lucide-react";
 import type { AiModel } from "@/lib/api/ai-model";
 import type { GenerationCapabilities } from "@/lib/generation-capabilities";
@@ -19,6 +17,8 @@ import { getApiErrorMessage } from "@/lib/api/api-error";
 import { resolveMediaUrl } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { SafeImage } from "@/components/media/managed-image";
+import { MediaReferenceActions } from "@/components/media/media-reference-actions";
+import { MediaThumbnail } from "@/components/media/media-thumbnail";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type {
@@ -56,7 +56,7 @@ interface GenerationSimpleComposerProps {
   onModelChange: (modelId: number) => void;
   onFormChange: (patch: Partial<GenerationFormState>) => void;
   onAddAttachments: (urls: string[], kind?: SimpleAttachmentKind) => void;
-  onRemoveAttachment: (url: string) => void;
+  onRemoveAttachment: (attachment: SimpleAttachment) => void;
   onSubmit: () => void;
   onAdvanced: () => void;
   attachmentDisabledReason?: string;
@@ -241,27 +241,21 @@ export function GenerationSimpleComposer({
                     fallbackType="image"
                   />
                 ) : attachment.mediaType === "video" ? (
-                  <FileVideo2 className="size-6 text-cyan-500/70" />
+                  <MediaThumbnail source={attachment.url} kind="video" alt={attachment.label} fit="cover" compact interactive={false} />
                 ) : (
                   <Music2 className="size-6 text-violet-500/70" />
                 )}
                 <span className="absolute inset-x-1 bottom-1 truncate rounded-md bg-black/55 px-1 py-0.5 text-center text-[9px] text-white backdrop-blur-sm">
                   {attachment.label}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onRemoveAttachment(attachment.url)}
-                  title={`移除${attachment.label}`}
-                  aria-label={`移除${attachment.label}`}
-                  className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  <X className="h-3 w-3" />
-                </button>
+                <MediaReferenceActions label={attachment.label}
+                  onRemove={() => onRemoveAttachment(attachment)} />
               </div>
             ))}
           </div>
         )}
 
+        {/* 输入区与面板共用底色，局部覆盖全局表单底色令牌。 */}
         <Textarea
           value={prompt}
           onChange={(event) => onFormChange({ prompt: event.target.value })}
@@ -282,10 +276,10 @@ export function GenerationSimpleComposer({
           placeholder={
             mode === "image"
               ? "描述你想生成的画面，也可以直接粘贴参考图片…"
-              : "描述画面、动作与镜头，也可以粘贴首帧或参考图片…"
+              : "描述画面、动作与镜头…"
           }
           className={cn(
-            "min-h-32 resize-none rounded-none border-0 bg-transparent px-5 pb-4 pr-32 text-[15px] leading-7 shadow-none focus-visible:ring-0",
+            "min-h-32 max-h-[min(16rem,30dvh)] scroll-m-1 overflow-y-auto overscroll-contain rounded-none border-0 bg-transparent [--field-background:transparent] px-5 pb-4 pr-32 text-[15px] leading-7 shadow-none focus-visible:ring-0",
             attachmentDisabledReason || attachments.length > 0
               ? "pt-3"
               : "pt-5",
@@ -293,7 +287,7 @@ export function GenerationSimpleComposer({
         />
 
         <div className="mx-2 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/15 bg-background/42 p-1.5 shadow-sm backdrop-blur-xl dark:border-white/6">
-          <div className="flex min-w-0 flex-wrap items-center gap-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <GenerationAttachmentUploadMenu
               options={attachmentOptions}
               uploading={uploading}
@@ -319,7 +313,7 @@ export function GenerationSimpleComposer({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 pl-1">
+          <div className="flex items-center gap-2 pl-1">
             {error && (
               <span
                 className="max-w-72 truncate text-[10px] text-destructive"
@@ -347,7 +341,7 @@ export function GenerationSimpleComposer({
                       : "生成视频"
               }
               aria-label={mode === "image" ? "生成图片" : "生成视频"}
-              className="min-w-[76px] rounded-xl px-4"
+              className="min-w-20"
             >
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

@@ -1,10 +1,10 @@
 import type { AiModel, ComfyUiInputCapability, ModelPreset } from "@/lib/api/ai-model";
 import { videoRulesOf, type VideoModelRules } from "@/lib/video-model-rules";
-import { imageOutputOptions, resolutionChoices, type ImageSizeTable } from "@/lib/image-output-sizes";
+import { imageOutputCapabilities, type ImageOutputCapabilities } from "@/lib/image-output-sizes";
 
 type JsonRecord = Record<string, unknown>;
 
-export interface GenerationCapabilities {
+export interface GenerationCapabilities extends ImageOutputCapabilities {
   unavailable?: string | null;
   workflowInputs?: Record<string, ComfyUiInputCapability>;
   h3Ref: boolean;
@@ -22,11 +22,6 @@ export interface GenerationCapabilities {
   maxImageInputs: number;
   maxReferenceVideos: number;
   maxReferenceAudios: number;
-  supportedAspectRatios: string[];
-  supportedResolutions: string[];
-  imageSizes?: ImageSizeTable;
-  pixelResolutionTiers?: string[];
-  supportAutoSize?: boolean;
   minDuration: number;
   maxDuration: number;
   maxDurationByResolution?: Record<string, number>;
@@ -37,8 +32,6 @@ export interface GenerationCapabilities {
   supportGenerateAudio: boolean;
   supportWatermark: boolean;
   supportSeed?: boolean;
-  defaultAspectRatio?: string;
-  defaultResolution?: string;
   videoRules?: VideoModelRules;
   exclusiveInputModes?: boolean;
   framesWithReferenceVideos?: boolean;
@@ -138,12 +131,10 @@ export function resolveGenerationCapabilities(
   const imageModel = model.modelType === 2;
   const h3Ref = !imageModel && config.h3Ref === true;
   const advertised = strings(config, [], "supportedResolutions", "resolutions");
-  const output = imageModel ? imageOutputOptions(config, advertised) : {
+  const output = imageModel ? imageOutputCapabilities(config) : {
     supportedResolutions: h3Ref ? [] : advertised.length ? advertised : ["720p", "1080p"],
   };
-  const mappedRatios = "imageSizes" in output && output.imageSizes
-    ? [...new Set(Object.values(output.imageSizes).flatMap((sizes) => Object.keys(sizes)))] : [];
-  const ratios = strings(config, mappedRatios.length ? mappedRatios : ["1:1", "4:3", "3:4", "16:9", "9:16"], "supportedAspectRatios");
+  const ratios = strings(config, ["1:1", "4:3", "3:4", "16:9", "9:16"], "supportedAspectRatios");
   const videoRules = videoRulesOf(config);
   const referenceImageInputFormats = strings(
     config,
@@ -207,8 +198,7 @@ export function resolveGenerationCapabilities(
     maxReferenceVideos: inputMaximum(config, "maxReferenceVideos", "maxRefVideos"),
     maxReferenceAudios: inputMaximum(config, "maxReferenceAudios", "maxRefAudios"),
     ...output,
-    supportedAspectRatios: imageModel && output.supportedResolutions.length
-      ? ratios.filter((ratio) => resolutionChoices(output, ratio).length > 0) : ratios,
+    supportedAspectRatios: "supportedAspectRatios" in output ? output.supportedAspectRatios : ratios,
     minDuration: num(config, 3, "minDuration"),
     maxDuration: num(config, 10, "maxDuration"),
     maxDurationByResolution: config.maxDurationByResolution as Record<string, number> | undefined,

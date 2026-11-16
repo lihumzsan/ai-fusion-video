@@ -68,14 +68,12 @@ public class AgentRunReplayService {
             return Flux.using(
                     () -> subscribeWakeups(
                             safeRunId, signals.wakeupsWhenSubscribed(safeRunId).flatMapMany(value -> value), gate),
-                    // Each cycle completes before resubscribing so long waits do not retain old subscriptions.
                     ignored -> Flux.defer(() -> replayCycle(
                             safeRunId,
                             cursor,
                             deliveredTerminal,
                             gate,
-                            firstSnapshot,
-                            complete)).repeat(() -> !complete.get()),
+                            firstSnapshot, complete)).repeat(() -> !complete.get()),
                     Disposable::dispose);
         });
     }
@@ -117,13 +115,9 @@ public class AgentRunReplayService {
                             deliveredTerminal,
                             snapshot)
                             : Flux.empty();
+                    // 每轮结束后再订阅下一轮，避免持续运行时递归叠加 Reactor 请求链。
                     return drained.concatWith(Mono.defer(() -> afterDrain(
-                            runId,
-                            cursor,
-                            deliveredTerminal,
-                            gate,
-                            snapshot,
-                            complete)).then(Mono.empty()));
+                            runId, cursor, deliveredTerminal, gate, snapshot, complete)).thenMany(Flux.empty()));
                 });
     }
 
@@ -163,30 +157,15 @@ public class AgentRunReplayService {
         Long terminalSequence = drainedSnapshot.terminalSequence();
         if (terminalSequence != null
                 && deliveredTerminal.get() >= terminalSequence) {
-            return confirmTerminalTailEmpty(runId, cursor, deliveredTerminal, complete);
+            return loadSnapshot(runId).doOnNext(confirmed -> {
+                acknowledgeCursorTerminal(cursor.get(), deliveredTerminal, confirmed);
+                Long confirmedTerminal = confirmed.terminalSequence();
+                if (confirmedTerminal != null && deliveredTerminal.get() >= confirmedTerminal
+                        && confirmed.latestSequence() <= cursor.get()) {
+                    complete.set(true);
+                }
+            }).then();
         }
-        return awaitNextCycle(cursor, gate);
-    }
-
-    private Mono<Void> confirmTerminalTailEmpty(
-            String runId,
-            AtomicLong cursor,
-            AtomicLong deliveredTerminal,
-            AtomicBoolean complete) {
-        return loadSnapshot(runId)
-                .doOnNext(confirmed -> {
-                    acknowledgeCursorTerminal(
-                            cursor.get(), deliveredTerminal, confirmed);
-                    Long terminalSequence = confirmed.terminalSequence();
-                    complete.set(terminalSequence != null
-                            && deliveredTerminal.get() >= terminalSequence
-                            && confirmed.latestSequence() <= cursor.get());
-                }).then();
-    }
-
-    private Mono<Void> awaitNextCycle(
-            AtomicLong cursor,
-            ReplayWakeGate gate) {
         return gate.awaitDirtyOrPoll(POLL_INTERVAL)
                 .doOnNext(sequenceHint -> {
                     if (sequenceHint > 0 && sequenceHint <= cursor.get()) {

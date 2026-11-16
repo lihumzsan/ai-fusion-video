@@ -38,6 +38,7 @@ public final class GenerationHttpClients {
 
     public static OkHttpClient.Builder singleRequestBuilder() {
         return new OkHttpClient.Builder()
+                .eventListenerFactory(GenerationHttpLoggingListener::new)
                 .retryOnConnectionFailure(false)
                 .followRedirects(false)
                 .followSslRedirects(false)
@@ -85,7 +86,7 @@ public final class GenerationHttpClients {
                 } catch (IOException unreadable) {
                     body = "已收到错误状态，响应内容读取失败";
                 }
-                throw GenerationProviderFailure.http(response.code(), body);
+                throw GenerationProviderFailure.http(response.code(), body, response.header("Retry-After"));
             }
         });
     }

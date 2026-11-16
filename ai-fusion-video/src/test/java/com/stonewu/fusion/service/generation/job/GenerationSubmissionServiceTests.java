@@ -4,8 +4,12 @@ import cn.hutool.json.JSONObject;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.stonewu.fusion.entity.generation.GenerationSubmissionEntity;
+import com.stonewu.fusion.entity.generation.RemoteGenerationJobEntity;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import com.stonewu.fusion.service.canvas.agent.node.CanvasAgentNodeGeneration;
+import com.stonewu.fusion.service.ai.youkou.YoukouGenerationRequests;
+import com.stonewu.fusion.service.generation.video.strategy.youkou.YoukouVideoStrategy;
+import org.mockito.ArgumentCaptor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stonewu.fusion.entity.ai.AiModel;
@@ -29,6 +33,8 @@ import com.stonewu.fusion.service.generation.video.VideoGenerationService;
 import com.stonewu.fusion.service.generation.video.strategy.VideoGenerationStrategy;
 import com.stonewu.fusion.service.generation.video.strategy.VideoGenerationStrategyRouter;
 import com.stonewu.fusion.service.resource.model.ResourceCommandContext;
+import com.stonewu.fusion.service.media.ManagedStorageConfiguration;
+import com.stonewu.fusion.service.media.model.MediaException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.stonewu.fusion.mapper.generation.GenerationSubmissionMapper;
@@ -46,7 +52,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * 保留旧 Consumer 的版本与参数覆盖，并针对明确选定的旧发布版本增加回归。
+ * 保护生成任务的工作流版本、参数保留和多结果拆分，避免重用参数或批量提交时丢失原始输入。
  */
 class GenerationSubmissionServiceTests {
     final GenerationModelSnapshot models = mock(GenerationModelSnapshot.class);
@@ -58,14 +64,17 @@ class GenerationSubmissionServiceTests {
     final ImageGenerationStrategy imageProtocol = mock(ImageGenerationStrategy.class);
     final VideoGenerationStrategy videoProtocol = mock(VideoGenerationStrategy.class);
     final GenerationModelCapabilityService capabilities = mock(GenerationModelCapabilityService.class);
+    final AssetImageReferencePolicy assetReferences = mock(AssetImageReferencePolicy.class);
+    final ManagedStorageConfiguration storage = mock(ManagedStorageConfiguration.class);
     final ResourceCommandContext actor = ResourceCommandContext.user(new CanvasActor(9, null), null);
     final AiModel model = AiModel.builder().id(5L).apiConfigId(7L).comfyuiWorkflowId(12L).build();
+    final RemoteGenerationJobMapper remoteJobs = mock(RemoteGenerationJobMapper.class);
     final GenerationSubmissionService service = new GenerationSubmissionService(mock(GenerationSubmissionMapper.class),
-            mock(RemoteGenerationJobMapper.class), new CanvasJson(new ObjectMapper().findAndRegisterModules()),
+            remoteJobs, new CanvasJson(new ObjectMapper().findAndRegisterModules()),
             mock(GenerationExecutionContexts.class), models, capabilities, workflows,
             images, videos, mock(GenerationJobRepository.class), mock(GenerationOutbox.class),
             mock(GenerationRequestRepository.class), imageProtocols, videoProtocols,
-            mock(GenerationInputVersions.class), mock(CanvasAgentNodeGeneration.class));
+            mock(GenerationInputVersions.class), mock(CanvasAgentNodeGeneration.class), assetReferences, storage);
 
     @BeforeEach
     void configure() {
@@ -104,6 +113,15 @@ class GenerationSubmissionServiceTests {
         service.image(task, UUID.randomUUID().toString(), actor, null);
         assertThat(task.getWorkflowVersionId()).isEqualTo(21L);
         verify(images).create(task);
+    }
+
+    @Test
+    void invalidStorageRejectsImageBeforeCreatingAPaidGenerationTask() {
+        when(storage.requireDefault()).thenThrow(MediaException.storageConfiguration("默认存储未启用"));
+        var task = ImageTask.builder().modelId(5L).prompt("测试").count(1).build();
+        assertThatThrownBy(() -> service.image(task, UUID.randomUUID().toString(), actor, null))
+                .isInstanceOf(MediaException.class).hasMessage("默认存储未启用");
+        verifyNoInteractions(images, remoteJobs, imageProtocols);
     }
 
     @Test
@@ -166,5 +184,43 @@ class GenerationSubmissionServiceTests {
         service.video(task, UUID.randomUUID().toString(), actor, null);
         assertThat(task.getGenerateAudio()).isNull();
         verify(videos).create(task);
+    }
+
+    @Test
+    void youkouMultipleResultsCreateIndependentJobsWithTheSameReferences() throws Exception {
+        model.setComfyuiWorkflowId(null);
+        when(videoProtocols.resolve(model)).thenReturn(new YoukouVideoStrategy(mock(YoukouGenerationRequests.class)));
+        when(videos.createItem(any())).thenReturn(VideoItem.builder().id(31L).build(),
+                VideoItem.builder().id(32L).build(), VideoItem.builder().id(33L).build());
+        var task = VideoTask.builder().modelId(5L).prompt("保留蓝色立方体").count(3).duration(4)
+                .referenceVideoUrls("[\"media://22222222-2222-4222-8222-222222222222\"]").build();
+
+        service.video(task, UUID.randomUUID().toString(), actor, null);
+
+        var captured = ArgumentCaptor.forClass(RemoteGenerationJobEntity.class);
+        verify(remoteJobs, times(3)).insertQueued(captured.capture());
+        var queued = captured.getAllValues();
+        assertThat(queued).extracting(RemoteGenerationJobEntity::getId).doesNotHaveDuplicates();
+        assertThat(queued).extracting(RemoteGenerationJobEntity::getItemId).containsExactly(31L, 32L, 33L);
+        assertThat(queued).extracting(RemoteGenerationJobEntity::getItemIndex).containsExactly(0, 1, 2);
+        for (var job : queued) {
+            var input = new ObjectMapper().readTree(job.getInputJson());
+            assertThat(input.path("count").asInt()).isEqualTo(1);
+            assertThat(input.path("prompt").asText()).isEqualTo("保留蓝色立方体");
+            assertThat(input.path("referenceVideoUrls").asText()).isEqualTo(task.getReferenceVideoUrls());
+        }
+    }
+
+    @Test
+    void changedAssetReferencesCannotCreateAnotherPaidGeneration() {
+        var agent = new ResourceCommandContext(actor.actor(), "agent", null, "asset-run", "retry", "worker", 1L);
+        var task = ImageTask.builder().modelId(5L).prompt("去掉参考图后重试").count(1).build();
+        doThrow(new GenerationJobException(409, "ASSET_IMAGE_REFERENCES_CHANGED", "参考图不能移除"))
+                .when(assetReferences).enforce(task, agent);
+
+        assertThatThrownBy(() -> service.image(task, UUID.randomUUID().toString(), agent, null))
+                .isInstanceOf(GenerationJobException.class).hasMessageContaining("参考图不能移除");
+
+        verifyNoInteractions(images, imageProtocols);
     }
 }

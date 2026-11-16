@@ -81,7 +81,11 @@ public class ProviderMediaFetcher {
             }
             var request = new Request.Builder().url(HttpUrl.get(uri.toString())).header("Accept-Encoding", "identity");
             if (authorized) {
-                request.header("Authorization", "Bearer " + config.getApiKey());
+                if ("gemini".equals(config.getPlatform())) {
+                    request.header("x-goog-api-key", config.getApiKey());
+                } else {
+                    request.header("Authorization", "Bearer " + config.getApiKey());
+                }
             }
             try (var response = builder.build().newCall(request.get().build()).execute()) {
                 int status = response.code();
@@ -90,6 +94,8 @@ public class ProviderMediaFetcher {
                         throw new IOException("供应商重定向无效");
                     }
                     uri = uri.resolve(response.header("Location"));
+                    // 签名下载链接即使与提供商同域，也不再携带原接口的凭据。
+                    allowAuthorization = false;
                     continue;
                 }
                 if (status != 200 || response.body() == null) {
@@ -137,6 +143,7 @@ public class ProviderMediaFetcher {
         }
         return switch (config.getPlatform()) {
             case "openai", "openai_compatible", "newapi", "agnes" -> "https://api.openai.com";
+            case "gemini" -> "https://generativelanguage.googleapis.com";
             default -> null;
         };
     }

@@ -29,24 +29,19 @@ interface ApiConfigCardProps {
   onEditModel: (model: AiModel) => void;
   onDeleteModel: (id: number) => void;
   onAddModel: () => void;
-  onTestTextModel: (model: AiModel) => void;
+  onTestModel: (model: AiModel) => void;
   onModelsChanged: () => Promise<void>;
 }
 
-export function ApiConfigCard({ config, provider, models, modelPresets, collapsed, testingModelIds, onToggle, onFetch, onWorkflow, onEditConfig, onDeleteConfig, onEditModel, onDeleteModel, onAddModel, onTestTextModel, onModelsChanged }: ApiConfigCardProps) {
+export function ApiConfigCard({ config, provider, models, modelPresets, collapsed, testingModelIds, onToggle, onFetch, onWorkflow, onEditConfig, onDeleteConfig, onEditModel, onDeleteModel, onAddModel, onTestModel, onModelsChanged }: ApiConfigCardProps) {
   const shouldReduceMotion = useReducedMotion();
     const localCodex = config.platform === "codex";
     const configModels = models.filter(m => m.apiConfigId === config.id);
 
     // 按类型分组
-    const modelTypeGroups = [
-      { type: 2, label: "图像生成" },
-      { type: 3, label: "视频生成" },
-      { type: COMFYUI_VOICE_MODEL.type, label: MODEL_TYPE_LABELS[COMFYUI_VOICE_MODEL.type] },
-      { type: 1, label: "对话" },
-    ].map(g => ({
-      ...g,
-      models: configModels.filter(m => m.modelType === g.type),
+    const modelTypeGroups = [1, 2, 3, 4].map(type => ({
+      type, label: MODEL_TYPE_LABELS[type],
+      models: configModels.filter(m => m.modelType === type),
     })).filter(g => g.models.length > 0);
 
     return (
@@ -335,9 +330,9 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
 
                           {/* 操作按钮 */}
                           <div className="flex items-center gap-2 shrink-0 mt-0.5">
-                            {model.modelType === 1 && model.status === 1 && (
+                            {model.status === 1 && (model.modelType === 1 || model.modelType === 4 && ["gemini", "vertex_ai", "vertex_ai_api_key"].includes(config.platform || "")) && (
                               <Button variant="outline" size="xs"
-                                onClick={() => onTestTextModel(model)}
+                                onClick={() => onTestModel(model)}
                                 disabled={testingModelIds.has(model.id)}
                               >
                                 {testingModelIds.has(model.id) ? (
@@ -345,7 +340,7 @@ export function ApiConfigCard({ config, provider, models, modelPresets, collapse
                                 ) : (
                                   <Search className="h-3 w-3" />
                                 )}
-                                {testingModelIds.has(model.id) ? "检测中" : "检测"}
+                                {model.modelType === 4 ? "试听" : testingModelIds.has(model.id) ? "检测中" : "检测"}
                               </Button>
                             )}
                             {!voice && !model.defaultModel && model.status === 1 && config.status === 1 && (

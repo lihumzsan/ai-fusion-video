@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useUnsavedDialog } from "@/components/settings/use-unsaved-dialog";
-import { Check, ChevronRight, Loader2, Sparkles } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toastApiError } from "@/lib/api/toast-api-error";
 import {
@@ -21,13 +21,13 @@ import {
 } from "@/lib/api/ai-model";
 import {
   Dialog,
-  DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
+import { DialogContent } from "@/components/shared/dialog-content";
 import {
   Select,
   SelectTrigger,
@@ -42,6 +42,8 @@ import type { ProviderDefinition } from "@/lib/api/provider-catalog";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { CapabilityPresetSelect } from "./capability-preset-select";
+import { filterModelPresets } from "@/lib/settings/model-preset-filter";
+import { applyModelsDevMatch, findOfficialGooglePreset } from "@/lib/settings/models-dev-match";
 import { ModelConfigForm } from "./model-config-form";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SponsorModelOptions } from "./sponsor-model-options";
@@ -83,7 +85,9 @@ export interface AiModelDialogProps {
 type AiModelFormState = AiModelCreateReq & { id?: number; status?: number };
 
 export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, providers, defaultApiConfigId, initialCandidate, onSaved }: AiModelDialogProps) {
-  const initialProviderId = apiConfigs.find((config) => config.id === defaultApiConfigId)?.providerId;
+  const initialApiConfig = apiConfigs.find((config) => config.id === defaultApiConfigId);
+  const initialProviderId = initialApiConfig?.providerId;
+  const initialPlatform = initialApiConfig?.platform;
   const initialModelType = providers.find((provider) => provider.id === initialProviderId)?.supportedModelTypes[0] ?? 1;
   const [saving, setSaving] = useState(false);
   const [comfyUiCapabilityValid, setComfyUiCapabilityValid] = useState(true);
@@ -138,7 +142,7 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
         });
       } else {
         const modelType = initialCandidate?.modelType ?? initialModelType;
-        const startsAsVoice = initialProviderId === "comfyui" && modelType === COMFYUI_VOICE_MODEL.type;
+        const startsAsVoice = initialPlatform === "comfyui" && modelType === COMFYUI_VOICE_MODEL.type;
         initializeForm({
           name: initialCandidate?.name ?? (startsAsVoice ? COMFYUI_VOICE_MODEL.name : ""),
           code: initialCandidate?.id ?? "",
@@ -148,19 +152,19 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
           config: initialCandidate?.config,
           maxConcurrency: 5,
           defaultModel: false,
-          supportVision: false,
-          multimodalInputTypes: [],
-          multimodalInputTransports: {},
-          supportReasoning: false,
-          reasoningEffortLevels: [],
-          contextWindow: 0,
+          supportVision: initialCandidate?.textCapabilities?.inputTypes.includes("image") ?? false,
+          multimodalInputTypes: initialCandidate?.textCapabilities?.inputTypes ?? [],
+          multimodalInputTransports: initialCandidate?.textCapabilities?.inputTransports ?? {},
+          supportReasoning: initialCandidate?.textCapabilities?.reasoning ?? false,
+          reasoningEffortLevels: initialCandidate?.textCapabilities?.reasoningEfforts ?? [],
+          contextWindow: initialCandidate?.textCapabilities?.contextWindow ?? 0,
           apiConfigId: defaultApiConfigId,
           comfyuiWorkflowId: undefined,
         });
       }
       setShowAdvanced(!!initialCandidate?.configurationHint);
     }
-  }, [open, editingModel, defaultApiConfigId, initialModelType, initialProviderId, initialCandidate]);
+  }, [open, editingModel, defaultApiConfigId, initialModelType, initialPlatform, initialCandidate]);
 
   const updateField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -179,21 +183,22 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
   const selectedProvider = providers.find((provider) => provider.id === selectedApiConfig?.providerId);
   const selectedPlatform = selectedApiConfig?.platform;
   const localCodex = selectedPlatform === "codex";
-  const editingVoice = editingModel?.modelType === COMFYUI_VOICE_MODEL.type;
+  const editingVoice = editingModel?.modelType === COMFYUI_VOICE_MODEL.type &&
+    apiConfigs.some(config => config.id === editingModel.apiConfigId && config.platform === "comfyui");
   const modelTypeOptions = localCodex
     ? MODEL_TYPE_OPTIONS.filter((option) => option.value === 1)
     : MODEL_TYPE_OPTIONS.filter((option) => {
-      if (option.value === COMFYUI_VOICE_MODEL.type) {
+      if (selectedPlatform === "comfyui" && option.value === COMFYUI_VOICE_MODEL.type) {
         return editingVoice || (!editingModel && selectedPlatform === "comfyui");
       }
       return !editingVoice && (!selectedProvider || selectedProvider.supportedModelTypes.includes(option.value));
     });
   const requiresComfyUiWorkflow = selectedPlatform === "comfyui" && (form.modelType === 2 || form.modelType === 3);
-  const comfyUiVoice = form.modelType === COMFYUI_VOICE_MODEL.type;
+  const comfyUiVoice = selectedPlatform === "comfyui" && form.modelType === COMFYUI_VOICE_MODEL.type;
   const availableApiConfigs = editingVoice
     ? apiConfigs.filter(config => config.platform === "comfyui" && (config.status === 1 || config.id === form.apiConfigId))
     : apiConfigs;
-  const voiceConfigUnavailable = comfyUiVoice && (selectedPlatform !== "comfyui" || selectedApiConfig?.status !== 1);
+  const voiceConfigUnavailable = comfyUiVoice && selectedApiConfig?.status !== 1;
   const canSetDefaultModel = selectedApiConfig?.status === 1 && form.status !== 0;
   const defaultModelUnavailable = !comfyUiVoice && !!form.defaultModel && !canSetDefaultModel;
   const modelCode = comfyUiVoice ? COMFYUI_VOICE_MODEL.code : form.code;
@@ -201,17 +206,16 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
   const selectedCapabilityPreset = form.capabilityPresetCode
     ? presets.find(p => p.code === form.capabilityPresetCode) || null
     : null;
-  const visiblePresets = presets.filter((preset) => preset.modelType === form.modelType &&
-    (selectedProvider?.quickSetup
-      ? preset.providerId === selectedProvider.id || form.modelType === 1 && !preset.providerId
-      : !preset.providerId));
+  const visiblePresets = filterModelPresets(presets, form.modelType, selectedPlatform, selectedProvider);
   const selectedPresetConfig = selectedCapabilityPreset?.config as Record<string, unknown> | undefined;
   const effectiveModelConfig = mergeConfigObjects(selectedPresetConfig || {}, parseConfigJson(form.config));
   const showOpenAiResponsesMode = form.modelType === 1 && supportsOpenAiResponsesMode(selectedPlatform);
   const apiModeValue = getFirstConfigString(effectiveModelConfig, OPENAI_RESPONSE_MODE_CONFIG_KEYS) ?? "__unset__";
-  const hasRequestProtocol = form.modelType >= 1 && form.modelType <= 3;
+  const googlePlatform = ["gemini", "vertex_ai", "vertex_ai_api_key"].includes(selectedPlatform || "");
+  const hasRequestProtocol = form.modelType >= 1 && (form.modelType <= 3 || googlePlatform);
   const apiConfigDefaultProtocol = getApiConfigDefaultProtocol(selectedApiConfig, form.modelType);
-  const protocolOptions = getProtocolOptionsForModelType(form.modelType);
+  const protocolOptions = getProtocolOptionsForModelType(form.modelType, selectedApiConfig?.providerId, providers)
+    .filter(option => form.modelType <= 3 || !googlePlatform || option.value === (selectedPlatform === "gemini" ? "gemini" : "vertex_ai"));
   const modelProtocolOverride = form.modelProtocol?.trim() || "";
   const effectiveModelProtocol = modelProtocolOverride || apiConfigDefaultProtocol;
   const modelProtocolSelectOptions = [
@@ -223,7 +227,9 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
     },
     ...protocolOptions,
   ];
-  const protocolConfigured = !hasRequestProtocol || Boolean(effectiveModelProtocol);
+  const protocolConfigured = !hasRequestProtocol || (localCodex
+    ? effectiveModelProtocol === "codex"
+    : protocolOptions.some((option) => option.value === effectiveModelProtocol));
   const comfyUiWorkflowConfigured = !requiresComfyUiWorkflow || (Boolean(form.comfyuiWorkflowId) && comfyUiCapabilityValid);
   const compatibleCapabilityPresets = visiblePresets.filter(preset => isCapabilityPresetCompatible({
     preset,
@@ -279,6 +285,10 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
     setForm(previous => ({
       ...previous,
       capabilityPresetCode: preset.code,
+      name: previous.name || preset.name,
+      code: previous.code || preset.modelCode || preset.code,
+      modelProtocol: previous.modelProtocol || apiConfigDefaultProtocol ? previous.modelProtocol
+        : googlePlatform ? selectedPlatform === "gemini" ? "gemini" : "vertex_ai" : preset.modelProtocol || "",
       config: "",
       supportReasoning: preset.supportReasoning ?? previous.supportReasoning,
       reasoningEffortLevels: preset.reasoningEffortLevels ?? previous.reasoningEffortLevels,
@@ -385,57 +395,11 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
           <DialogDescription>
             {comfyUiVoice ? "用于画布的「生成参考音频」节点，输出 WAV。" : localCodex
               ? "填写当前 Codex 账号可用的模型标识。设为默认后，未指定模型的文本任务会使用它。"
-              : "填写模型标识并关联 API 配置；通常继承对应能力的默认协议，特殊模型可单独覆盖。"}
+              : "设置模型名称、调用标识和 API 配置。"}
           </DialogDescription>
         </DialogHeader>
 
         <DialogScrollBody className="space-y-4">
-          {/* 预设快速选择 */}
-          {!localCodex && !comfyUiVoice && !editingModel && visiblePresets.length > 0 && (
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                <Sparkles className="h-3 w-3" />
-                从预设导入
-              </Label>
-              <div className="flex flex-wrap gap-1.5">
-                {visiblePresets.map(preset => (
-                  <button
-                    key={preset.code}
-                    type="button"
-                    onClick={() => {
-                      setForm(prev => ({
-                        ...prev,
-                        name: preset.name,
-                        code: preset.modelCode || preset.code,
-                        capabilityPresetCode: preset.code,
-                        modelProtocol: preset.modelProtocol || "",
-                        modelType: preset.modelType,
-                        description: preset.description,
-                        config: "",
-                        supportReasoning: preset.supportReasoning ?? false,
-                        reasoningEffortLevels: preset.reasoningEffortLevels ?? [],
-                        contextWindow: preset.contextWindow ?? 0,
-                        multimodalInputTypes: preset.multimodalInputTypes ?? [],
-                        multimodalInputTransports: preset.multimodalInputTransports ?? {},
-                        supportVision: preset.multimodalInputTypes?.includes("image") ?? false,
-                      }));
-                    }}
-                    className={cn(
-                      "inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs transition-all duration-200",
-                      "border",
-                      form.capabilityPresetCode === preset.code
-                        ? "border-primary/50 bg-primary/10 text-primary font-medium"
-                        : "border-border/30 text-muted-foreground hover:border-primary/30 hover:text-foreground hover:bg-white/5"
-                    )}
-                  >
-                    {form.capabilityPresetCode === preset.code && <Check className="h-3 w-3" />}
-                    {preset.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="grid gap-3 sm:grid-cols-2">
           {/* 模型名称 */}
           <div className="space-y-1.5">
@@ -526,20 +490,22 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
                 const nextProvider = providers.find((provider) => provider.id === nextApiConfig?.providerId);
                 setForm(prev => {
                   let nextModelType = prev.modelType;
-                  if (nextPlatform === "comfyui" && ![2, 3, COMFYUI_VOICE_MODEL.type].includes(nextModelType)) {
-                    nextModelType = 2;
-                  }
-                  if (nextPlatform !== "comfyui" && nextModelType === COMFYUI_VOICE_MODEL.type) {
+                  if (nextPlatform === "comfyui") {
+                    const canUseVoiceDesign = nextModelType === COMFYUI_VOICE_MODEL.type && (editingVoice || !editingModel);
+                    if (!canUseVoiceDesign && nextModelType !== 2 && nextModelType !== 3) {
+                      nextModelType = 2;
+                    }
+                  } else if (comfyUiVoice) {
                     nextModelType = nextProvider?.supportedModelTypes[0] ?? 1;
-                  }
-                  if (nextProvider && !nextProvider.supportedModelTypes.includes(nextModelType)) {
+                  } else if (nextProvider && !nextProvider.supportedModelTypes.includes(nextModelType)) {
                     nextModelType = nextProvider.supportedModelTypes[0];
                   }
                   let next: AiModelFormState = {
                     ...prev,
                     apiConfigId: nextApiConfigId,
                     modelType: nextModelType,
-                    modelProtocol: nextPlatform === "comfyui" ? "" : prev.modelProtocol,
+                    modelProtocol: nextPlatform !== "comfyui" && getProtocolOptionsForModelType(nextModelType, nextApiConfig?.providerId, providers)
+                      .some((option) => option.value === prev.modelProtocol) ? prev.modelProtocol : "",
                     comfyuiWorkflowId: undefined,
                     maxConcurrency: nextPlatform === "comfyui" ? 1 : prev.maxConcurrency,
                   };
@@ -652,11 +618,11 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
                 <div>
                   <Label className="text-xs font-medium text-foreground">请求协议</Label>
                   <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-                    优先使用模型覆盖；未覆盖时使用当前 API 配置为该能力设置的默认协议。
+                    选择模型使用的接口协议。
                   </p>
                 </div>
                 <span className="rounded-md border border-border/50 bg-background/70 px-2 py-1 text-[10px] text-muted-foreground">
-                  模型覆盖 → API 配置默认
+                  可继承 API 默认设置
                 </span>
               </div>
 
@@ -688,7 +654,7 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] leading-4 text-muted-foreground">
-                  仅在这个模型需要偏离 API 配置默认值时设置，例如 New API 下的即梦、可灵或 Sora 视频。
+                  继承 API 默认设置，或为当前模型单独选择。
                 </p>
               </div>
 
@@ -726,9 +692,23 @@ export function AiModelDialog({ open, onOpenChange, editingModel, apiConfigs, pr
           {!localCodex && !requiresComfyUiWorkflow && !comfyUiVoice && <CapabilityPresetSelect
             selectedCode={form.capabilityPresetCode}
             presets={compatibleCapabilityPresets}
+            allPresets={presets}
             hasCustomConfig={hasCustomCapabilityConfig}
+            modelCode={form.code}
+            modelType={form.modelType}
+            apiConfigId={form.apiConfigId}
+            platform={selectedPlatform}
+            matchedName={typeof effectiveModelConfig.catalogMatch === "object" && effectiveModelConfig.catalogMatch !== null
+              ? (effectiveModelConfig.catalogMatch as { modelId?: string }).modelId : undefined}
             onSelectCustom={selectCustomCapabilities}
             onApplyPreset={applyCapabilityPreset}
+            onApplyOnline={(candidate, fetchedAt) => {
+              const official = findOfficialGooglePreset(candidate, presets, selectedPlatform);
+              const matched = applyModelsDevMatch(form, candidate, fetchedAt, official);
+              setForm({ ...matched, name: form.name || candidate.name,
+                code: form.code || official?.modelCode || candidate.modelId });
+              setShowAdvanced(true);
+            }}
           />}
 
           {/* 默认模型 */}
